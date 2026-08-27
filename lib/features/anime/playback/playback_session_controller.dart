@@ -431,7 +431,11 @@ class PlaybackSessionController {
 
         if (round == 0) {
           try {
-            await _player.rebuildDecoder(_recoveryPosition);
+            final resumePosition = _recoveryPosition;
+            // 重建后的落点和开播一样要确认:确认不到就把位置流里那些「从头放」
+            // 的取样挡在外面,并在时长到手时补一发 seek。
+            _armResume(resumePosition, generation);
+            await _player.rebuildDecoder(resumePosition);
             if (!_isCurrent(generation)) return;
             _recoveryRound = round + 1;
             return;

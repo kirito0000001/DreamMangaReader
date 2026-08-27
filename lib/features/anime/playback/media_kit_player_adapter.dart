@@ -249,8 +249,10 @@ class MediaKitPlayerAdapter implements PlayerAdapter {
     if (track == null || _disposed) return;
     await _resetAudioAttachment();
     await _closeSession();
-    await _openTrack(track);
-    if (resumePosition > Duration.zero) await seek(resumePosition);
+    // 卡顿重建同样是「从这个位置开机」,不是开完再跳回去 —— 后者在解码器还没
+    // 读到文件时发出,会被丢掉,于是一次卡顿就把观众送回片头。
+    _position = resumePosition;
+    await _openTrack(track, startAt: resumePosition);
   }
 
   void _onBackendError(Object error) {
@@ -271,9 +273,8 @@ class MediaKitPlayerAdapter implements PlayerAdapter {
       await _closeSession();
       _pendingAudioUrl = track.audioUrl;
       await _backend.configure(track);
-      await _backend.open(track);
+      await _backend.open(track, startAt: _position);
       await _restoreSubtitle();
-      if (_position > Duration.zero) await _backend.seek(_position);
     } catch (error) {
       if (!_disposed) {
         _errorController.add(

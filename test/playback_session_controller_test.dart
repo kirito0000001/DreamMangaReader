@@ -495,6 +495,49 @@ void main() {
     });
   });
 
+  test('a stall that rebuilds at zero does not send the viewer back to the start',
+      () {
+    fakeAsync((async) {
+      final adapter = _FakePlayerAdapter();
+      final progress = <Duration>[];
+      final controller = PlaybackSessionController(
+        messages: _messages,
+        player: adapter,
+        tracks: _FakeTrackProvider(),
+        delay: (_) async {},
+        onProgress: (position, _) => progress.add(position),
+      );
+      controller.start(const [_track480], _track480);
+      async.flushMicrotasks();
+      adapter.durationController.add(const Duration(minutes: 24));
+      adapter.playingController.add(true);
+      adapter.positionController.add(const Duration(minutes: 9));
+      progress.clear();
+
+      adapter.bufferingController.add(true);
+      async.elapse(const Duration(seconds: 8));
+      async.flushMicrotasks();
+      expect(adapter.decoderRebuilds, [const Duration(minutes: 9)]);
+
+      // 重建出来的解码器从头开始吐位置 —— 一帧都不能算数。
+      adapter.durationController.add(Duration.zero);
+      adapter.positionController.add(Duration.zero);
+      adapter.positionController.add(const Duration(milliseconds: 96));
+      expect(progress, isEmpty);
+      expect(controller.state.position, const Duration(minutes: 9));
+
+      // 时长回来了 = 文件重新打开了,这一刻补发的 seek 会被接受。
+      adapter.durationController.add(const Duration(minutes: 24));
+      async.flushMicrotasks();
+      expect(adapter.seeks, [const Duration(minutes: 9)]);
+
+      adapter.positionController.add(const Duration(minutes: 9, seconds: 1));
+      expect(progress, [const Duration(minutes: 9, seconds: 1)]);
+      controller.dispose();
+      async.flushMicrotasks();
+    });
+  });
+
   test('a player error recovers immediately but user pause does not', () {
     fakeAsync((async) {
       final adapter = _FakePlayerAdapter();

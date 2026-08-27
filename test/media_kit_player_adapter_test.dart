@@ -139,7 +139,8 @@ void main() {
     backend.errorController.add(StateError('HTTP 501'));
     await Future<void>.delayed(Duration.zero);
     expect(backend.opened.last, _hls);
-    expect(backend.seeks.last, const Duration(seconds: 73));
+    expect(backend.openStarts.last, const Duration(seconds: 73));
+    expect(backend.seeks, isEmpty);
     expect(surfaced, isEmpty);
 
     backend.errorController.add(StateError('connection reset'));
@@ -212,7 +213,9 @@ void main() {
 
     expect(backend.clearedAudioCount, 1);
     expect(backend.opened, [dash, dash]);
-    expect(backend.seeks.last, const Duration(minutes: 9));
+    // 重建是「从 9 分钟开机」,不是开完再跳回去。
+    expect(backend.openStarts, [Duration.zero, const Duration(minutes: 9)]);
+    expect(backend.seeks, isEmpty);
     expect(backend.attachedAudio, [dash.audioUrl, dash.audioUrl]);
     await adapter.dispose();
   });
@@ -241,10 +244,9 @@ void main() {
 
     expect(backend.clearedAudioCount, 1);
     expect(backend.opened.last, hlsWithAudio);
-    expect(backend.seeks, [
-      const Duration(minutes: 7),
-      const Duration(minutes: 7),
-    ]);
+    // 网关回退同理:位置跟着重开的那次 open 走,不再补一发会被吞掉的 seek。
+    expect(backend.seeks, [const Duration(minutes: 7)]);
+    expect(backend.openStarts.last, const Duration(minutes: 7));
     await adapter.dispose();
   });
 }
