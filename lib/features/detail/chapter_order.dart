@@ -31,7 +31,12 @@ List<Chapter> orderedChapters(List<Chapter> chapters) {
   return [for (final e in indexed) e.$2];
 }
 
-/// 跨源对齐用的话数:源自报的优先,没有则从章名解析;都拿不到 → null
-/// (番外 / 序章 / 特别篇,不参与跨源对齐,但**照样留在原位**)。
+/// 跨源对齐用的话数:**只认章名**,拿不到 → null(番外 / 序章 / 分季重编号的那些,
+/// 不参与跨源对齐,但**照样留在原位**照常显示)。
+///
+/// 刻意不看源自报的 [Chapter.number]:部分源(YYDS 的 data-index)给的是列表位置
+/// 不是话数,番外/预告会拿位置号冒充话数,抢占真话数的行、污染跨源共享进度
+/// (线上实测过,见 chapter_number.dart)。宿主没法逐源判断谁报得准,一律不信 ——
+/// 对不齐只是少一个合并,对错了是点开另一话。
 double? chapterNumberOf(Chapter chapter) =>
-    chapter.number ?? parseChapterNumber(chapter.name);
+    parseChapterNumber(chapter.name);

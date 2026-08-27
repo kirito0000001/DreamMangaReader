@@ -56,10 +56,45 @@ void main() {
         [_source('bzm', const ['第24话'])],
       );
 
-      // 他源的第24话挂到当前源第一条 24(第24话),而不是第三/四季那两条。
+      expect([for (final r in merged) r.label], _seasonedNames);
       final row = merged.firstWhere((r) => r.label == '第24话');
       expect([for (final pv in row.providers) pv.meta.id], ['copy', 'bzm']);
-      expect([for (final r in merged) r.label], _seasonedNames);
+    });
+
+    test('a season chapter never poses as the same number in the main run', () {
+      final merged = mergeChapters(
+        _source('copy', _seasonedNames),
+        [_source('bzm', const ['第24话'])],
+      );
+
+      // 第三季第24话 / 第四季24话 各自从 1 数起,不是正传第24话:既不该挂上
+      // 包子的第24话(点开是另一话),也不该顶着跨源已读勾。
+      for (final label in const ['第三季第24话', '第四季24话']) {
+        final row = merged.firstWhere((r) => r.label == label);
+        expect(row.number, isNull, reason: label);
+        expect([for (final pv in row.providers) pv.meta.id], ['copy']);
+      }
+    });
+
+    test('alignment reads the chapter name, not the number the source claims',
+        () {
+      // YYDS 的 data-index 是列表位置:番外排在第 2 位就自报 number=2,
+      // 会抢走真·第2话那行(线上实测过)。宿主一律不信源自报的话数。
+      final yyds = ChapterSource(
+        const SourceMeta(id: 'yyds', name: 'yyds', script: '', kind: 'manga'),
+        _UnusedSource(),
+        'work',
+        const [
+          Chapter(id: 'y1', name: '第1话', number: 1),
+          Chapter(id: 'y2', name: '开幕特别篇', number: 2), // 位置 2,不是第2话
+          Chapter(id: 'y3', name: '第2话', number: 3),
+        ],
+      );
+      final merged = mergeChapters(_source('copy', const ['第1话', '第2话']), [yyds]);
+
+      expect([for (final r in merged) r.label], ['第1话', '第2话']);
+      expect([for (final pv in merged[1].providers) pv.chapter.id],
+          ['copy:第2话', 'y3']); // 而不是把「开幕特别篇」当第2话挂上来
     });
 
     test('chapters only other sources have land next to their number', () {
