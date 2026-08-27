@@ -16,6 +16,7 @@ class AnimePlayerControls extends StatefulWidget {
     super.key,
     required this.position,
     required this.duration,
+    this.buffered = Duration.zero,
     required this.playing,
     required this.buffering,
     required this.onPlayPause,
@@ -30,6 +31,11 @@ class AnimePlayerControls extends StatefulWidget {
 
   final Duration position;
   final Duration duration;
+
+  /// 已经缓冲到哪儿。画在进度条上就是播放头前面那截白条 —— 一眼看出「还能往前拖
+  /// 多少不用等」。一般只有一两分钟,不会缓完整集。
+  final Duration buffered;
+
   final bool playing;
   final bool buffering;
   final VoidCallback onPlayPause;
@@ -63,6 +69,11 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
   double get _sliderValue {
     if (_durationMs <= 0) return 0;
     return _visiblePosition.inMilliseconds.clamp(0, _durationMs).toDouble();
+  }
+
+  double get _bufferedValue {
+    if (_durationMs <= 0) return 0;
+    return widget.buffered.inMilliseconds.clamp(0, _durationMs).toDouble();
   }
 
   void _startScrub(double _) {
@@ -204,6 +215,8 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
           trackHeight: scrubbing ? 5 : 3,
           activeTrackColor: Theme.of(context).colorScheme.primary,
           inactiveTrackColor: Colors.white24,
+          // 缓冲条压在未播那段上:比它亮,比强调色暗,三层一眼分得开。
+          secondaryActiveTrackColor: Colors.white38,
           thumbColor: Theme.of(context).colorScheme.primary,
           thumbShape: RoundSliderThumbShape(
             enabledThumbRadius: scrubbing ? 8 : 5,
@@ -216,6 +229,7 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
         ),
         child: Slider(
           value: _sliderValue,
+          secondaryTrackValue: enabled ? _bufferedValue : null,
           min: 0,
           max: enabled ? _durationMs : 1,
           onChangeStart: enabled ? _startScrub : null,

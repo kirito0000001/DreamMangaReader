@@ -25,6 +25,7 @@ class _FakePlayerAdapter implements PlayerAdapter {
   final bufferingController = StreamController<bool>.broadcast(sync: true);
   final positionController = StreamController<Duration>.broadcast(sync: true);
   final durationController = StreamController<Duration>.broadcast(sync: true);
+  final bufferController = StreamController<Duration>.broadcast(sync: true);
   final completedController = StreamController<bool>.broadcast(sync: true);
   final errorController = StreamController<Object>.broadcast(sync: true);
 
@@ -48,6 +49,8 @@ class _FakePlayerAdapter implements PlayerAdapter {
   Stream<Duration> get position => positionController.stream;
   @override
   Stream<Duration> get duration => durationController.stream;
+  @override
+  Stream<Duration> get buffer => bufferController.stream;
   @override
   Stream<bool> get completed => completedController.stream;
   @override
@@ -91,6 +94,7 @@ class _FakePlayerAdapter implements PlayerAdapter {
     await bufferingController.close();
     await positionController.close();
     await durationController.close();
+    await bufferController.close();
     await completedController.close();
     await errorController.close();
   }
@@ -700,6 +704,46 @@ void main() {
       controller.dispose();
       async.flushMicrotasks();
     });
+  });
+
+  test('the buffered head reaches the state, clamped and per whole second',
+      () async {
+    final adapter = _FakePlayerAdapter();
+    final controller = PlaybackSessionController(
+      messages: _messages,
+      player: adapter,
+      tracks: _FakeTrackProvider(),
+      delay: (_) async {},
+    );
+    await controller.start(const [_track480], _track480);
+    adapter.durationController.add(const Duration(minutes: 24));
+
+    adapter.bufferController.add(const Duration(seconds: 95));
+    expect(controller.state.buffered, const Duration(seconds: 95));
+
+    // 缓冲不可能超过片长 —— 越界会让进度条的白条画到轨道外面。
+    adapter.bufferController.add(const Duration(minutes: 30));
+    expect(controller.state.buffered, const Duration(minutes: 24));
+    await controller.dispose();
+  });
+
+  test('reopening a stream drops the buffered head from the previous one',
+      () async {
+    final adapter = _FakePlayerAdapter();
+    final controller = PlaybackSessionController(
+      messages: _messages,
+      player: adapter,
+      tracks: _FakeTrackProvider(),
+      delay: (_) async {},
+    );
+    await controller.start(const [_track480], _track480);
+    adapter.durationController.add(const Duration(minutes: 24));
+    adapter.bufferController.add(const Duration(minutes: 3));
+
+    await controller.start(const [_track360], _track360);
+
+    expect(controller.state.buffered, Duration.zero);
+    await controller.dispose();
   });
 
   test('a resume start hands the position to open, not to a post-open seek',

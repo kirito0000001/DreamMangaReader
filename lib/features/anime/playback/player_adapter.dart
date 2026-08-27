@@ -6,6 +6,11 @@ abstract interface class PlayerAdapter {
   Stream<bool> get buffering;
   Stream<Duration> get position;
   Stream<Duration> get duration;
+
+  /// 已经缓冲到片子的哪个时间点 —— 绝对位置,和 [duration] 同一把尺子,
+  /// 可以直接画成进度条后面那条白条。
+  Stream<Duration> get buffer;
+
   Stream<bool> get completed;
   Stream<Object> get errors;
 

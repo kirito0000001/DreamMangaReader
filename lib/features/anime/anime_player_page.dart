@@ -1049,6 +1049,7 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
             child: AnimePlayerControls(
               position: _dragTarget ?? _playback.position,
               duration: _playback.duration,
+              buffered: _playback.buffered,
               playing: _playing,
               buffering: _buffering,
               onPlayPause: _togglePlay,

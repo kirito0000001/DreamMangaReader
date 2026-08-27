@@ -186,6 +186,8 @@ class MediaKitPlayerAdapter implements PlayerAdapter {
   @override
   Stream<Duration> get duration => _backend.durationChanges;
   @override
+  Stream<Duration> get buffer => _backend.buffer;
+  @override
   Stream<bool> get completed => _backend.completed;
   @override
   Stream<Object> get errors => _errorController.stream;

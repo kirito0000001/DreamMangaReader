@@ -658,6 +658,7 @@ class _PageFakeAdapter implements PlayerAdapter {
   final bufferingController = StreamController<bool>.broadcast(sync: true);
   final positionController = StreamController<Duration>.broadcast(sync: true);
   final durationController = StreamController<Duration>.broadcast(sync: true);
+  final bufferController = StreamController<Duration>.broadcast(sync: true);
   final completedController = StreamController<bool>.broadcast(sync: true);
   final errorController = StreamController<Object>.broadcast(sync: true);
   final subtitleController =
@@ -678,6 +679,8 @@ class _PageFakeAdapter implements PlayerAdapter {
   Stream<Duration> get position => positionController.stream;
   @override
   Stream<Duration> get duration => durationController.stream;
+  @override
+  Stream<Duration> get buffer => bufferController.stream;
   @override
   Stream<bool> get completed => completedController.stream;
   @override
@@ -711,6 +714,7 @@ class _PageFakeAdapter implements PlayerAdapter {
     await bufferingController.close();
     await positionController.close();
     await durationController.close();
+    await bufferController.close();
     await completedController.close();
     await errorController.close();
     await subtitleController.close();

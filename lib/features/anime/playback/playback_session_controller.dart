@@ -47,6 +47,7 @@ class PlaybackSessionController {
       _player.buffering.listen(_onBuffering),
       _player.position.listen(_onPosition),
       _player.duration.listen(_onDuration),
+      _player.buffer.listen(_onBuffer),
       _player.completed.listen(_onCompleted),
       _player.errors.listen(_onError),
     ]);
@@ -208,6 +209,8 @@ class PlaybackSessionController {
       phase: PlaybackPhase.opening,
       position: resumePosition,
       duration: _duration,
+      // 换流就是换一份缓冲,旧的那条白条不能留在新的一集上。
+      buffered: Duration.zero,
       selectedTrack: track,
     ));
     // 断点交给播放器在打开文件的那一刻自己落上去,而不是打开之后再补一发 seek ——
@@ -391,6 +394,20 @@ class PlaybackSessionController {
     _duration = duration;
     _emit(_state.copyWith(duration: duration));
     _reissueResumeIfNeeded(duration);
+  }
+
+  /// 缓冲末端。整秒才发一次,和位置用同一套节流 —— 后端每一百毫秒报一次,
+  /// 条也就一秒挪一格。
+  void _onBuffer(Duration buffer) {
+    if (_disposed) return;
+    final bounded = _duration > Duration.zero && buffer > _duration
+        ? _duration
+        : buffer < Duration.zero
+            ? Duration.zero
+            : buffer;
+    if (bounded.inSeconds == _state.buffered.inSeconds) return;
+    // copyWith 不带 message 就等于把它清掉,而恢复中/失败的文案还要留在屏幕上。
+    _emit(_state.copyWith(buffered: bounded, message: _state.message));
   }
 
   void _onCompleted(bool completed) {
