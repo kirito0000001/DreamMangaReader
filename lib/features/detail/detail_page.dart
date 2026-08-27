@@ -36,7 +36,7 @@ import '../library/manga_cover.dart';
 import '../reader/reader_page.dart';
 import 'author_works_page.dart';
 import 'bangumi_search_sheet.dart';
-import 'chapter_order.dart';
+import 'chapter_merge.dart';
 import 'cross_source_sheet.dart';
 
 class DetailPage extends StatefulWidget {
@@ -57,7 +57,9 @@ class _DetailPageState extends State<DetailPage>
     with DetailCoverTint<DetailPage> {
   late final MangaSource _source = buildSource(widget.meta);
   Map<String, String> get _imgHeaders => imageHeadersOf(widget.meta);
-  List<Chapter>? _chapters;
+  // 当前源的章节表(构造时顺序已归一);null = 还没加载出来。
+  ChapterSource? _current;
+  List<Chapter>? get _chapters => _current?.chapters;
   // 库里同名书的其它源章节表:用于把跨源章节合并成一张列表(含各话由哪些源提供)。
   final List<_SrcChapters> _otherSources = [];
   bool _mergeLoading = false; // 正在找/拉其它源(主动搜索期间)
@@ -227,59 +229,16 @@ class _DetailPageState extends State<DetailPage>
     return null;
   }
 
-  /// 把当前源 + 其它源的章节按话数合并成一张列表。
-  /// - 当前源章节**全保留**(含 上/下 拆章、无号章),不因同话数被折叠;
-  /// - 他源命中已有话数 → 记为该话的「提供源」;他源独有的话数 → 作为补充章加入;
-  /// - 按话数稳定升序(等号保原序,上/下 不乱;无号章沉底)。
-  List<_MergedChapter> _mergedChapters() {
-    final current = _chapters ?? const <Chapter>[];
-    final rows = <_MergedChapter>[];
-    final currentByNumber = <double, List<_MergedChapter>>{}; // 挂他源 provider 用
-    final extraByNumber = <double, _MergedChapter>{}; // 他源独有话数
-
-    for (final c in current) {
-      final order = chapterOrder(c, rows.length);
-      final n = order.number;
-      final row = _MergedChapter(n, c.name,
-          [_ChapterProvider(widget.meta, _source, c, widget.manga.id)], order);
-      rows.add(row);
-      if (n != null) (currentByNumber[n] ??= []).add(row);
-    }
-    for (final os in _otherSources) {
-      for (final c in os.chapters) {
-        final order = chapterOrder(c, rows.length);
-        final n = order.number;
-        if (n == null) continue; // 他源无号章无法对齐,忽略
-        final prov = _ChapterProvider(os.meta, os.source, c, os.mangaId);
-        final curRows = currentByNumber[n];
-        if (curRows != null) {
-          // 当前源已有该话(可能上/下多行)→ 只挂到第一行,避免重复挂。
-          final r = curRows.first;
-          if (!r.providers.any((pv) => pv.meta.id == os.meta.id)) {
-            r.providers.add(prov);
-          }
-        } else {
-          final er = extraByNumber[n];
-          if (er == null) {
-            final row = _MergedChapter(n, c.name, [prov], order);
-            extraByNumber[n] = row;
-            rows.add(row);
-          } else if (!er.providers.any((pv) => pv.meta.id == os.meta.id)) {
-            er.providers.add(prov);
-          }
-        }
-      }
-    }
-    // 按显式话数、发布时间或标题话数稳定升序。
-    final indexed = [for (var i = 0; i < rows.length; i++) (i, rows[i])];
-    indexed.sort(
-        (left, right) => compareChapterOrder(left.$2.order, right.$2.order));
-    return [for (final e in indexed) e.$2];
+  /// 当前源 + 库里同名书的他源 → 详情页那张合并列表(无他源时 = 当前源本身)。
+  List<MergedChapter> _mergedChapters() {
+    final current = _current;
+    if (current == null) return const [];
+    return mergeChapters(current, _otherSources);
   }
 
   /// 打开合并列表里的一话:优先用当前源打开(老路径),否则用提供它的他源引擎打开。
-  void _openMerged(_MergedChapter row, {int initialPage = 0}) {
-    _ChapterProvider? cur;
+  void _openMerged(MergedChapter row, {int initialPage = 0}) {
+    ChapterProvider? cur;
     for (final pv in row.providers) {
       if (pv.meta.id == widget.meta.id) {
         cur = pv;
@@ -290,7 +249,7 @@ class _DetailPageState extends State<DetailPage>
   }
 
   /// 用**指定源**打开一话(点源角标 / 章节行右键·长按选源,可绕开默认的当前源优先)。
-  void _openViaProvider(_ChapterProvider prov, {int initialPage = 0}) {
+  void _openViaProvider(ChapterProvider prov, {int initialPage = 0}) {
     if (prov.meta.id == widget.meta.id) {
       _openChapter(prov.chapter, initialPage: initialPage);
       return;
@@ -310,11 +269,11 @@ class _DetailPageState extends State<DetailPage>
   }
 
   /// 章节行右键/长按:列出提供本话的源,选谁用谁打开(当前源带勾)。
-  Future<void> _showChapterSourceMenu(Offset pos, _MergedChapter row,
+  Future<void> _showChapterSourceMenu(Offset pos, MergedChapter row,
       {int initialPage = 0}) async {
     final p = context.palette;
     final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
-    final picked = await showMenu<_ChapterProvider>(
+    final picked = await showMenu<ChapterProvider>(
       context: context,
       position: RelativeRect.fromLTRB(pos.dx, pos.dy,
           overlay.size.width - pos.dx, overlay.size.height - pos.dy),
@@ -324,7 +283,7 @@ class _DetailPageState extends State<DetailPage>
           side: BorderSide(color: p.line)),
       items: [
         for (final pv in row.providers)
-          PopupMenuItem<_ChapterProvider>(
+          PopupMenuItem<ChapterProvider>(
             value: pv,
             height: 42,
             child: Row(children: [
@@ -638,7 +597,10 @@ class _DetailPageState extends State<DetailPage>
     final sw = Stopwatch()..start();
     try {
       final page = await _source.getChapters(widget.manga.id);
-      if (mounted) setState(() => _chapters = page.items);
+      if (mounted) {
+        setState(() => _current = ChapterSource(
+            widget.meta, _source, widget.manga.id, page.items));
+      }
       AppLog.i.info(LogCat.manga,
           '加载章节《${widget.manga.title}》· ${page.items.length} 话 · ${sw.elapsedMilliseconds}ms',
           detail: '源:${widget.meta.name} · id=${widget.manga.id}');
@@ -653,7 +615,7 @@ class _DetailPageState extends State<DetailPage>
   void _reloadChapters() {
     setState(() {
       _error = null;
-      _chapters = null;
+      _current = null;
     });
     _load();
   }
@@ -1260,10 +1222,10 @@ class _DetailPageState extends State<DetailPage>
       );
 
   Widget _chapterRow(
-      AppPalette p, LibraryStore store, _MergedChapter row, DownloadStore dl) {
+      AppPalette p, LibraryStore store, MergedChapter row, DownloadStore dl) {
     final multi = _otherSources.isNotEmpty; // 有他源才展示「哪些源提供」的角标
     // 当前源是否提供本话 → 用它的本地标记算 finished/页码/下载。
-    _ChapterProvider? cur;
+    ChapterProvider? cur;
     for (final pv in row.providers) {
       if (pv.meta.id == widget.meta.id) {
         cur = pv;
@@ -1405,8 +1367,7 @@ class _DetailPageState extends State<DetailPage>
       AppPalette p, LibraryStore store, DownloadStore dl) {
     final acc = coverAccent;
     // 合并跨源章节(当前源 + 库里同名书的他源;无他源时 = 当前源本身)。
-    final merged =
-        _chapters == null ? const <_MergedChapter>[] : _mergedChapters();
+    final merged = _mergedChapters();
     final extra = merged.length - (_chapters?.length ?? 0); // 他源补进来的话数
     // 倒序:新章在上(几千章免从头下拉);全局设置,记住选择。展示时翻转,
     // 数据模型不动(每行自包含,_openMerged 照常按行对象打开)。
@@ -1554,32 +1515,11 @@ class _DetailPageState extends State<DetailPage>
   }
 }
 
-/// 库里同名书某个「他源」的章节表(合并跨源章节列表用)。
-class _SrcChapters {
-  _SrcChapters(this.meta, this.source, this.mangaId, this.title, this.cover,
-      this.chapters);
-  final SourceMeta meta;
-  final MangaSource source;
-  final String mangaId;
-  final String title; // 该源自己的书名(打开时进度用它的元数据)
-  final String? cover; // 该源自己的封面
-  final List<Chapter> chapters;
-}
-
-/// 一个源对某话的供给:从哪个源、哪个引擎、打开哪一章。
-class _ChapterProvider {
-  _ChapterProvider(this.meta, this.source, this.chapter, this.mangaId);
-  final SourceMeta meta;
-  final MangaSource source;
-  final Chapter chapter;
-  final String mangaId;
-}
-
-/// 合并后的一话:跨源按话数对齐,记录该话由哪些源提供。
-class _MergedChapter {
-  _MergedChapter(this.number, this.label, this.providers, this.order);
-  final double? number; // 话数;null = 解析不出(番外等),按当前源原样保留
-  final String label; // 展示章名(取首个 provider 的)
-  final List<_ChapterProvider> providers; // 提供该话的源(当前源优先在前)
-  final ChapterOrder order;
+/// 库里同名书某个「他源」的章节表:在 [ChapterSource] 上补该源自己的书名/封面
+/// (用他源打开时,进度记在它自己的元数据下)。
+class _SrcChapters extends ChapterSource {
+  _SrcChapters(super.meta, super.source, super.mangaId, this.title, this.cover,
+      super.chapters);
+  final String title;
+  final String? cover;
 }
