@@ -22,7 +22,7 @@ abstract interface class MediaKitBackend {
   Duration get duration;
 
   Future<void> configure(VideoTrack track);
-  Future<void> open(VideoTrack track);
+  Future<void> open(VideoTrack track, {Duration startAt = Duration.zero});
   Future<void> attachAudio(String url);
   Future<void> clearAudio();
   Future<void> seek(Duration position);
@@ -102,9 +102,18 @@ class NativeMediaKitBackend implements MediaKitBackend {
     }
   }
 
+  // media_kit 把 [Media.start] 写进 mpv 的 on_load 钩子里 —— 那是 loadfile 真正
+  // 开始读文件之前的一刻,mpv 一定会认;文件卸载时它自己再把 start 复位成 none,
+  // 所以断点不会粘到下一集去。这比「open 完再 seek」稳:后者在文件还没打开时发出,
+  // 会被直接丢掉。
   @override
-  Future<void> open(VideoTrack track) => player.open(
-        Media(track.url, httpHeaders: track.headers),
+  Future<void> open(VideoTrack track, {Duration startAt = Duration.zero}) =>
+      player.open(
+        Media(
+          track.url,
+          httpHeaders: track.headers,
+          start: startAt > Duration.zero ? startAt : null,
+        ),
       );
 
   @override
@@ -184,33 +193,39 @@ class MediaKitPlayerAdapter implements PlayerAdapter {
   Stream<List<SubtitleOption>> get subtitles => _backend.subtitleTracks;
 
   @override
-  Future<void> open(VideoTrack track) async {
+  Future<void> open(VideoTrack track, {Duration startAt = Duration.zero}) async {
     if (_originalTrack != null) await _resetAudioAttachment();
     await _closeSession();
-    _position = Duration.zero;
+    _position = startAt;
     // 换集就把字幕选择清掉:上一集的轨道号在新的一集里指向别的东西。
     _subtitle = null;
-    await _openTrack(track);
+    await _openTrack(track, startAt: startAt);
   }
 
-  Future<void> _openTrack(VideoTrack track) async {
+  Future<void> _openTrack(
+    VideoTrack track, {
+    Duration startAt = Duration.zero,
+  }) async {
     _originalTrack = track;
     _pendingAudioUrl = track.audioUrl;
     _audioAttached = false;
     _directFallback = false;
     await _backend.configure(track);
     if (!track.hls) {
-      await _backend.open(track);
+      await _backend.open(track, startAt: startAt);
       await _restoreSubtitle();
       return;
     }
     final session = await _gateway.open(track, authScope: authScope);
     _session = session;
-    await _backend.open(VideoTrack(
-      url: session.localUri.toString(),
-      quality: track.quality,
-      hls: true,
-    ));
+    await _backend.open(
+      VideoTrack(
+        url: session.localUri.toString(),
+        quality: track.quality,
+        hls: true,
+      ),
+      startAt: startAt,
+    );
     await _restoreSubtitle();
   }
 

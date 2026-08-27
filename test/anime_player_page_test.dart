@@ -91,7 +91,9 @@ void main() {
     ));
     await tester.pump();
 
-    expect(adapter.seeks, [const Duration(seconds: 83)]);
+    // 断点是**开机位置**,不是打开之后再补的一发 seek —— 后者会在文件就绪前被丢掉。
+    expect(adapter.openStarts, [const Duration(seconds: 83)]);
+    expect(adapter.seeks, isEmpty);
     adapter.durationController.add(const Duration(minutes: 24));
     adapter.positionController.add(const Duration(milliseconds: 84100));
     await tester.pump();
@@ -661,6 +663,7 @@ class _PageFakeAdapter implements PlayerAdapter {
   final subtitleController =
       StreamController<List<SubtitleOption>>.broadcast(sync: true);
   final opened = <VideoTrack>[];
+  final openStarts = <Duration>[];
   final seeks = <Duration>[];
   final volumes = <double>[];
   final subtitlePicks = <SubtitleOption>[];
@@ -682,7 +685,10 @@ class _PageFakeAdapter implements PlayerAdapter {
   @override
   Stream<List<SubtitleOption>> get subtitles => subtitleController.stream;
   @override
-  Future<void> open(VideoTrack track) async => opened.add(track);
+  Future<void> open(VideoTrack track, {Duration startAt = Duration.zero}) async {
+    opened.add(track);
+    openStarts.add(startAt);
+  }
   @override
   Future<void> rebuildDecoder(Duration resumePosition) async {}
   @override

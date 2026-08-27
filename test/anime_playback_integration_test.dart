@@ -22,6 +22,7 @@ class _IntegrationBackend implements MediaKitBackend {
   final bufferController = StreamController<Duration>.broadcast(sync: true);
   final opened = <VideoTrack>[];
   final seeks = <Duration>[];
+  final openStarts = <Duration>[];
   int clearedAudioCount = 0;
 
   @override
@@ -45,7 +46,10 @@ class _IntegrationBackend implements MediaKitBackend {
   @override
   Future<void> configure(VideoTrack track) async {}
   @override
-  Future<void> open(VideoTrack track) async => opened.add(track);
+  Future<void> open(VideoTrack track, {Duration startAt = Duration.zero}) async {
+    opened.add(track);
+    openStarts.add(startAt);
+  }
   @override
   Future<void> attachAudio(String url) async {}
   @override

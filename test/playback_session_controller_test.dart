@@ -30,9 +30,13 @@ class _FakePlayerAdapter implements PlayerAdapter {
 
   final List<VideoTrack> opened = [];
   final List<Duration> seeks = [];
+  final List<Duration> openStarts = [];
   final List<Duration> decoderRebuilds = [];
   final List<Completer<void>> pauseGates = [];
   bool failOpen = false;
+
+  /// true = 后端收下了 startAt 却没落上去(libmpv 在文件就绪前吞掉 seek 的现场)。
+  bool dropStartAt = false;
   int playCalls = 0;
   int pauseCalls = 0;
 
@@ -57,9 +61,12 @@ class _FakePlayerAdapter implements PlayerAdapter {
   Future<void> setSubtitle(SubtitleOption option) async {}
 
   @override
-  Future<void> open(VideoTrack track) async {
+  Future<void> open(VideoTrack track, {Duration startAt = Duration.zero}) async {
     opened.add(track);
+    openStarts.add(startAt);
     if (failOpen) throw StateError('fixture open failure');
+    if (dropStartAt) return;
+    if (startAt > Duration.zero) positionController.add(startAt);
   }
 
   @override
@@ -376,26 +383,6 @@ void main() {
     await controller.dispose();
   });
 
-  test('initial playback seeks only after opening the track', () async {
-    final adapter = _FakePlayerAdapter();
-    final controller = PlaybackSessionController(
-      messages: _messages,
-      player: adapter,
-      tracks: _FakeTrackProvider(),
-      delay: (_) async {},
-    );
-
-    await controller.start(
-      const [_track480],
-      _track480,
-      initialPosition: const Duration(seconds: 83),
-    );
-
-    expect(adapter.opened, [_track480]);
-    expect(adapter.seeks, [const Duration(seconds: 83)]);
-    await controller.dispose();
-  });
-
   test('progress callback emits once per changed integer second', () async {
     final adapter = _FakePlayerAdapter();
     final progress = <(Duration, Duration)>[];
@@ -670,5 +657,118 @@ void main() {
       controller.dispose();
       async.flushMicrotasks();
     });
+  });
+
+  test('a resume start hands the position to open, not to a post-open seek',
+      () async {
+    final adapter = _FakePlayerAdapter();
+    final controller = PlaybackSessionController(
+      messages: _messages,
+      player: adapter,
+      tracks: _FakeTrackProvider(),
+      delay: (_) async {},
+    );
+
+    await controller.start(
+      const [_track480],
+      _track480,
+      initialPosition: const Duration(minutes: 12),
+    );
+
+    expect(adapter.openStarts, [const Duration(minutes: 12)]);
+    expect(adapter.seeks, isEmpty);
+    expect(controller.state.position, const Duration(minutes: 12));
+    await controller.dispose();
+  });
+
+  test('a swallowed resume neither reports zero nor forgets the target',
+      () async {
+    final adapter = _FakePlayerAdapter()..dropStartAt = true;
+    final progress = <Duration>[];
+    final controller = PlaybackSessionController(
+      messages: _messages,
+      player: adapter,
+      tracks: _FakeTrackProvider(),
+      delay: (_) async {},
+      onProgress: (position, _) => progress.add(position),
+    );
+
+    await controller.start(
+      const [_track480],
+      _track480,
+      initialPosition: const Duration(minutes: 12),
+    );
+    // 播放器从头放起 —— 这些取样一个都不能算数,一算历史里的 12 分钟就没了。
+    adapter.playingController.add(true);
+    adapter.positionController.add(Duration.zero);
+    adapter.positionController.add(const Duration(milliseconds: 104));
+    adapter.positionController.add(const Duration(seconds: 1));
+
+    expect(progress, isEmpty);
+    expect(controller.state.position, const Duration(minutes: 12));
+
+    // 时长到手 = 文件真的打开了,这一刻补发的 seek 一定会被接受。
+    adapter.durationController.add(const Duration(minutes: 24));
+    await Future<void>.delayed(Duration.zero);
+    expect(adapter.seeks, [const Duration(minutes: 12)]);
+
+    adapter.positionController.add(const Duration(minutes: 12));
+    expect(progress, [const Duration(minutes: 12)]);
+    await controller.dispose();
+  });
+
+  test('an unconfirmed resume gives up instead of freezing the progress bar',
+      () {
+    fakeAsync((async) {
+      final adapter = _FakePlayerAdapter()..dropStartAt = true;
+      final controller = PlaybackSessionController(
+        messages: _messages,
+        player: adapter,
+        tracks: _FakeTrackProvider(),
+        delay: (_) async {},
+        resumeConfirmationTimeout: const Duration(seconds: 20),
+      );
+      controller.start(
+        const [_track480],
+        _track480,
+        initialPosition: const Duration(minutes: 12),
+      );
+      async.flushMicrotasks();
+
+      adapter.positionController.add(const Duration(seconds: 3));
+      expect(controller.state.position, const Duration(minutes: 12));
+
+      async.elapse(const Duration(seconds: 20));
+      adapter.positionController.add(const Duration(seconds: 24));
+
+      expect(controller.state.position, const Duration(seconds: 24));
+      controller.dispose();
+      async.flushMicrotasks();
+    });
+  });
+
+  test('a user seek supersedes a resume that has not landed yet', () async {
+    final adapter = _FakePlayerAdapter()..dropStartAt = true;
+    final controller = PlaybackSessionController(
+      messages: _messages,
+      player: adapter,
+      tracks: _FakeTrackProvider(),
+      delay: (_) async {},
+    );
+    await controller.start(
+      const [_track480],
+      _track480,
+      initialPosition: const Duration(minutes: 12),
+    );
+
+    await controller.seekTo(const Duration(minutes: 2), resumeAfterSeek: false);
+    adapter.positionController.add(const Duration(minutes: 2));
+    // 断点恢复已经作废:时长到手也不该再把用户拽回 12 分钟。
+    adapter.durationController.add(const Duration(minutes: 24));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(adapter.seeks, [const Duration(minutes: 2)]);
+    expect(controller.state.position, const Duration(minutes: 2));
+    await controller.dispose();
   });
 }

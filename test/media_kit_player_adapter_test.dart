@@ -24,6 +24,7 @@ class _FakeBackend implements MediaKitBackend {
   final subtitleController =
       StreamController<List<SubtitleOption>>.broadcast(sync: true);
   final opened = <VideoTrack>[];
+  final openStarts = <Duration>[];
   final configured = <VideoTrack>[];
   final attachedAudio = <String>[];
   final seeks = <Duration>[];
@@ -53,7 +54,10 @@ class _FakeBackend implements MediaKitBackend {
   @override
   Future<void> configure(VideoTrack track) async => configured.add(track);
   @override
-  Future<void> open(VideoTrack track) async => opened.add(track);
+  Future<void> open(VideoTrack track, {Duration startAt = Duration.zero}) async {
+    opened.add(track);
+    openStarts.add(startAt);
+  }
   @override
   Future<void> attachAudio(String url) async => attachedAudio.add(url);
   @override

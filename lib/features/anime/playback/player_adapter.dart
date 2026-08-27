@@ -13,7 +13,12 @@ abstract interface class PlayerAdapter {
   /// 由播放页从 [VideoTrack.subtitles] 合进同一份列表。
   Stream<List<SubtitleOption>> get subtitles;
 
-  Future<void> open(VideoTrack track);
+  /// 打开一条流。
+  ///
+  /// [startAt] > 0 时要求**从这个位置开机**,而不是打开之后再 seek 过去:libmpv 的
+  /// loadfile 是异步的,open() 返回时文件常常还没真正打开,紧跟着发过去的 seek 会被
+  /// 静默丢掉 —— 画面从 0 开始播,断点就这么没了。
+  Future<void> open(VideoTrack track, {Duration startAt = Duration.zero});
   Future<void> rebuildDecoder(Duration resumePosition);
   Future<void> seek(Duration position);
   Future<void> play();

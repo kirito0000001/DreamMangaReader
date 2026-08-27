@@ -38,6 +38,7 @@ class PlaybackSessionController {
     this.stallThreshold = const Duration(seconds: 8),
     this.coldStartStallThreshold = const Duration(seconds: 24),
     this.stableResetThreshold = const Duration(seconds: 15),
+    this.resumeConfirmationTimeout = const Duration(seconds: 20),
   })  : _player = player,
         _tracks = tracks,
         _delay = delay ?? Future<void>.delayed {
@@ -76,6 +77,11 @@ class PlaybackSessionController {
   /// 出过第一帧之后仍用 [stallThreshold],真死流照样能被快速发现。
   final Duration coldStartStallThreshold;
   final Duration stableResetThreshold;
+
+  /// 断点恢复的**确认**窗口。超过它还没落到断点就认命,按当前真实位置继续 ——
+  /// 否则进度条会一直停在一个视频根本没到过的时间上。
+  final Duration resumeConfirmationTimeout;
+
   final _states = StreamController<PlaybackState>.broadcast(sync: true);
   final List<StreamSubscription<Object?>> _subscriptions = [];
 
@@ -91,6 +97,13 @@ class PlaybackSessionController {
   int? _reportedPositionSecond;
   Timer? _stallTimer;
   Timer? _stableTimer;
+
+  /// 已经请求、但还没看到播放器真的落上去的断点。非空期间位置流里那些**在断点
+  /// 之前**的取样一律不认:它们是「从头开始播了」的证据,拿它们覆盖
+  /// [_confirmedPosition] 会把断点连同历史记录一起清成 0。
+  Duration? _resumeTarget;
+  Timer? _resumeTimer;
+  bool _resumeReissued = false;
   int _generation = 0;
   int _seekGeneration = 0;
   int _recoveryRound = 0;
@@ -116,6 +129,7 @@ class PlaybackSessionController {
     _startedPlaying = false;
     _resumeAfterSeek = false;
     _pendingSeekTarget = null;
+    _clearResume();
     _recoveryRound = 0;
     final knownDuration = _duration;
     _confirmedPosition = _resumePosition(initialPosition, knownDuration);
@@ -159,6 +173,8 @@ class PlaybackSessionController {
             ? _duration
             : target;
     final seekGeneration = ++_seekGeneration;
+    // 用户自己点了个位置,断点恢复到此为止 —— 再去追那个旧断点就是跟用户对着干。
+    _clearResume();
     _pendingSeekTarget = bounded;
     _resumeAfterSeek = resumeAfterSeek;
     _stallTimer?.cancel();
@@ -186,18 +202,56 @@ class PlaybackSessionController {
     if (!_isCurrent(generation)) return;
     _selected = track;
     final resumePosition = _recoveryPosition;
+    final startAt =
+        resume && resumePosition > Duration.zero ? resumePosition : Duration.zero;
     _emit(_state.copyWith(
       phase: PlaybackPhase.opening,
       position: resumePosition,
       duration: _duration,
       selectedTrack: track,
     ));
-    await _player.open(track);
-    if (!_isCurrent(generation)) return;
-    final currentResumePosition = _recoveryPosition;
-    if (resume && currentResumePosition > Duration.zero) {
-      await _player.seek(currentResumePosition);
+    // 断点交给播放器在打开文件的那一刻自己落上去,而不是打开之后再补一发 seek ——
+    // 后者在文件还没就绪时会被静默丢掉,画面从 0 开始播。[_armResume] 是这条路
+    // 万一还是没走通时的兜底。
+    _armResume(startAt, generation);
+    await _player.open(track, startAt: startAt);
+  }
+
+  /// 记下这次开流要落到的断点,并给它一个认命期限。
+  void _armResume(Duration target, int generation) {
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
+    _resumeReissued = false;
+    if (target <= Duration.zero) {
+      _resumeTarget = null;
+      return;
     }
+    _resumeTarget = target;
+    _resumeTimer = Timer(resumeConfirmationTimeout, () {
+      if (_isCurrent(generation)) _clearResume();
+    });
+  }
+
+  void _clearResume() {
+    _resumeTimer?.cancel();
+    _resumeTimer = null;
+    _resumeTarget = null;
+    _resumeReissued = false;
+  }
+
+  /// 时长到手 = libmpv 真的把文件打开了。如果这时候还没落到断点,补发一次 seek:
+  /// 此刻发出去的一定会被接受。只补一次,补不上就让 [resumeConfirmationTimeout]
+  /// 去认命,免得和播放器来回拉锯。
+  void _reissueResumeIfNeeded(Duration duration) {
+    final target = _resumeTarget;
+    if (target == null || _resumeReissued) return;
+    if (duration <= Duration.zero || _pendingSeekTarget != null) return;
+    if (target >= duration) {
+      _clearResume();
+      return;
+    }
+    _resumeReissued = true;
+    unawaited(_player.seek(target));
   }
 
   void _onPlaying(bool playing) {
@@ -284,6 +338,7 @@ class PlaybackSessionController {
       _confirmedPosition = position;
       _pendingSeekTarget = null;
       _resumeAfterSeek = false;
+      _clearResume();
       _emit(_state.copyWith(
         position: position,
         clearPendingSeekTarget: true,
@@ -294,6 +349,14 @@ class PlaybackSessionController {
         unawaited(_playAfterSeekConfirmation(seekGeneration));
       }
       return;
+    }
+
+    final resumeTarget = _resumeTarget;
+    if (resumeTarget != null) {
+      // 还没走到断点:这一帧说明播放器是从头开始放的。既不能拿它覆盖断点,
+      // 也不能报进度 —— 一报就把历史里那个真进度写成 0 了。
+      if (position < resumeTarget - _seekConfirmationTolerance) return;
+      _clearResume();
     }
 
     if (position == Duration.zero && _confirmedPosition > Duration.zero) return;
@@ -327,6 +390,7 @@ class PlaybackSessionController {
     if (_disposed) return;
     _duration = duration;
     _emit(_state.copyWith(duration: duration));
+    _reissueResumeIfNeeded(duration);
   }
 
   void _onCompleted(bool completed) {
@@ -458,6 +522,7 @@ class PlaybackSessionController {
     _generation++;
     _seekGeneration++;
     _cancelTimers();
+    _clearResume();
     for (final subscription in _subscriptions) {
       await subscription.cancel();
     }
