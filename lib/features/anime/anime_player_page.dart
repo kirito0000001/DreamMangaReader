@@ -190,6 +190,7 @@ class AnimePlayerPage extends StatefulWidget {
     required this.meta,
     required this.animeId,
     required this.animeTitle,
+    this.animeCover,
     required this.episodes,
     required this.index,
     this.initialPosition = Duration.zero,
@@ -199,6 +200,9 @@ class AnimePlayerPage extends StatefulWidget {
   final SourceMeta meta;
   final String animeId;
   final String animeTitle;
+
+  /// 写进历史记录用的封面。离线播放拿不到,留空 —— 仓库那边会保住已有的那张。
+  final String? animeCover;
   final List<Chapter> episodes; // 番剧沿用章节契约:一集=一个 Chapter
   final int index;
   final Duration initialPosition;
@@ -833,6 +837,7 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
       sourceId: widget.meta.id,
       animeId: widget.animeId,
       title: widget.animeTitle,
+      cover: widget.animeCover,
       episodeId: episode.id,
       episodeName: episode.name,
       episodeIndex: _i,

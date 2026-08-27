@@ -3,97 +3,46 @@ import 'package:flutter/material.dart';
 import '../../app/anime_library_store.dart';
 import '../../core/l10n/app_strings.dart';
 import '../../core/source/models.dart';
-import '../../core/source/source.dart';
 import '../../core/source/source_registry.dart';
 import '../common/transitions.dart';
-import 'anime_player_page.dart';
+import 'anime_detail_page.dart';
 
-typedef AnimeHistoryPlayerBuilder = Widget Function(
+typedef AnimeHistoryDetailBuilder = Widget Function(
   SourceMeta meta,
-  String animeId,
-  String title,
-  List<Chapter> episodes,
-  int index,
-  Duration initialPosition,
+  Manga anime,
 );
 
+/// 从历史记录打开一条番剧。
+///
+/// 落点是**详情页**,不是播放器。详情页自己会把「继续观看 · 第 N 集」摆在主按钮上,
+/// 接着看仍然只要一下;而直接冲进播放器的话,想下载、想看简介、想挑另一集,都得退
+/// 出去把这部番重新搜一遍。
 Future<void> openAnimeHistory(
   BuildContext context,
   AnimeHistoryEntry entry, {
-  MangaSource Function(SourceMeta meta) sourceBuilder = buildSource,
   List<SourceMeta>? sources,
-  AnimeHistoryPlayerBuilder playerBuilder = _buildPlayer,
+  AnimeHistoryDetailBuilder detailBuilder = _buildDetail,
 }) async {
-  MangaSource? source;
-  // 两条错误文案都在 await 之前取好 —— 拿到分集时 context 可能已经失效。
-  final sourceUnavailable = context.l10n.anime_sourceUnavailable;
-  final noPlayableEpisode = context.l10n.anime_noPlayableEpisode;
-  try {
-    final catalog = sources ?? registeredSources;
-    final meta = catalog
-        .where(
-            (candidate) => candidate.id == entry.sourceId && candidate.isAnime)
-        .firstOrNull;
-    if (meta == null) throw StateError(sourceUnavailable);
-
-    source = sourceBuilder(meta);
-    final episodes = await _loadEpisodes(source, entry.animeId);
-    if (episodes.isEmpty) throw StateError(noPlayableEpisode);
-    final matchingIndex =
-        episodes.indexWhere((episode) => episode.id == entry.episodeId);
-    final index = matchingIndex >= 0
-        ? matchingIndex
-        : entry.episodeIndex.clamp(0, episodes.length - 1);
-    source.dispose();
-    source = null;
-    if (!context.mounted) return;
-
-    await pushPage(context, playerBuilder(
-      meta,
-      entry.animeId,
-      entry.title,
-      episodes,
-      index,
-      Duration(seconds: entry.positionSeconds),
-    ));
-  } catch (error) {
-    if (!context.mounted) return;
+  final catalog = sources ?? registeredSources;
+  final meta = catalog
+      .where((candidate) => candidate.id == entry.sourceId && candidate.isAnime)
+      .firstOrNull;
+  if (meta == null) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(context.l10n.animeResumeFailed('$error'))),
+      SnackBar(content: Text(context.l10n.anime_sourceUnavailable)),
     );
-  } finally {
-    source?.dispose();
+    return;
   }
+  await pushPage(
+    context,
+    detailBuilder(
+      meta,
+      Manga(id: entry.animeId, title: entry.title, cover: entry.cover),
+    ),
+  );
 }
 
-Future<List<Chapter>> _loadEpisodes(
-  MangaSource source,
-  String animeId,
-) async {
-  final episodes = <Chapter>[];
-  var result = await source.getChapters(animeId);
-  episodes.addAll(result.items);
-  for (var page = 2; result.hasNext && page <= 100; page++) {
-    result = await source.getChapters(animeId, page: page);
-    if (result.items.isEmpty) break;
-    episodes.addAll(result.items);
-  }
-  return List.unmodifiable(episodes);
-}
-
-Widget _buildPlayer(
-  SourceMeta meta,
-  String animeId,
-  String title,
-  List<Chapter> episodes,
-  int index,
-  Duration initialPosition,
-) =>
-    AnimePlayerPage(
+Widget _buildDetail(SourceMeta meta, Manga anime) => AnimeDetailPage(
       meta: meta,
-      animeId: animeId,
-      animeTitle: title,
-      episodes: episodes,
-      index: index,
-      initialPosition: initialPosition,
+      anime: anime,
     );

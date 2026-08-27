@@ -165,10 +165,23 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
         meta: widget.meta,
         animeId: widget.anime.id,
         animeTitle: _title,
+        animeCover: _display.cover,
         episodes: _episodes,
         index: index,
         initialPosition: position,
       ));
+
+  /// 「继续观看」该落在哪一集。
+  ///
+  /// 认分集 id;id 对不上(源重新编号、换了线路)时退回记下的序号,而不是把整个
+  /// 续播入口丢掉 —— 从历史进来的人要的就是接着看。
+  int _resumeIndex(AnimeHistoryEntry? history) {
+    if (history == null || _episodes.isEmpty) return -1;
+    final matched =
+        _episodes.indexWhere((episode) => episode.id == history.episodeId);
+    if (matched >= 0) return matched;
+    return history.episodeIndex.clamp(0, _episodes.length - 1);
+  }
 
   String _downloadTaskId(Chapter episode) => contentDownloadTaskId(
         DownloadContentKind.anime,
@@ -415,9 +428,7 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
   Widget _cta(AppPalette p) {
     final library = AnimeLibraryScope.maybeOf(context);
     final history = library?.historyFor(widget.meta.id, widget.anime.id);
-    final resumeIndex = history == null
-        ? -1
-        : _episodes.indexWhere((episode) => episode.id == history.episodeId);
+    final resumeIndex = _resumeIndex(history);
     final canPlay = !_loading && _episodes.isNotEmpty;
     final resume = canPlay && resumeIndex >= 0;
     final acc = coverAccent;
@@ -427,7 +438,8 @@ class _AnimeDetailPageState extends State<AnimeDetailPage>
       accent: acc,
       onAccent: coverPalette?.onPrimary ?? p.onAccent,
       resumed: resume,
-      resumeLabel: history?.episodeName ?? '',
+      // 分集 id 对不上时退回了序号,那条历史里的集名就是过期的 —— 报当前落点的名字。
+      resumeLabel: resume ? _episodes[resumeIndex].name : '',
       onPrimary: canPlay
           ? () => _play(resume ? resumeIndex : 0,
               position: resume

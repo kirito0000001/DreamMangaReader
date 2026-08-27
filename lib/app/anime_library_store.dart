@@ -247,7 +247,8 @@ class AnimeLibraryStore extends ChangeNotifier {
       sourceId: sourceId,
       animeId: animeId,
       title: title,
-      cover: cover,
+      // 离线播放没有封面可给,别拿 null 把已经记下的那张擦掉。
+      cover: cover ?? current?.cover,
       episodeId: episodeId,
       episodeName: episodeName,
       episodeIndex: episodeIndex.clamp(0, 1 << 30),
