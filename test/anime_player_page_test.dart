@@ -528,13 +528,21 @@ void main() {
     adapter.positionController.add(const Duration(minutes: 2));
     await tester.pump();
 
+    // 前进比后退跨得大 —— 等距的 ±10 会让人在两个点之间来回弹。
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
     await tester.pump();
-    expect(adapter.seeks.last, const Duration(minutes: 2, seconds: 10));
+    expect(adapter.seeks.last, const Duration(minutes: 2, seconds: 15));
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await tester.pump();
-    expect(adapter.seeks.last, const Duration(minutes: 2));
+    expect(adapter.seeks.last, const Duration(minutes: 2, seconds: 10));
+
+    // Shift+→ 跨过整段片头。
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.pump();
+    expect(adapter.seeks.last, const Duration(minutes: 3, seconds: 40));
 
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
     await tester.pump();

@@ -264,6 +264,11 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
   // —— 手势与控件层(B站/YouTube 那套:全屏占满、点一下出控件、长按倍速快进)——
   // 明确**不做**双击快进/快退:issue #16 说了那个不好用。
   static const Duration _controlsIdle = Duration(seconds: 4);
+
+  // 跳转步长与底部控件保持一致:后退小、前进大,免得在两个点之间来回弹。
+  static const int _backSeconds = 5;
+  static const int _forwardSeconds = 15;
+  static const int _openingSeconds = 90;
   static const double _boostRate = 3.0;
 
   bool _controlsVisible = true;
@@ -727,11 +732,14 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.arrowLeft) {
-      _seekBy(-10);
+      _seekBy(-_backSeconds);
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.arrowRight) {
-      _seekBy(10);
+      // Shift+→ 直接跨过片头:90 秒是绝大多数番剧的 OP 长度。
+      _seekBy(HardwareKeyboard.instance.isShiftPressed
+          ? _openingSeconds
+          : _forwardSeconds);
       return KeyEventResult.handled;
     }
     if (k == LogicalKeyboardKey.arrowUp) {

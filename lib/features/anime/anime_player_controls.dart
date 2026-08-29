@@ -95,6 +95,13 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
     widget.onSeek(target, _wasPlaying);
   }
 
+  /// 跳转步长故意不对称:后退小、前进大。等距的 ±10 会让人在两个点之间来回
+  /// 弹 —— 退回去发现退多了,再前进又回到原处。90 秒是绝大多数番剧的 OP 长度,
+  /// 一下按过去就是跳片头。
+  static const _backSeconds = 5;
+  static const _forwardSeconds = 15;
+  static const _openingSeconds = 90;
+
   void _shortSeek(int seconds) {
     final requested = widget.position + Duration(seconds: seconds);
     final target = requested < Duration.zero
@@ -148,15 +155,23 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
                 icon: Icons.skip_next_rounded,
                 onPressed: widget.onNextEpisode,
               ),
-              _button(
-                tooltip: l10n.player_back10,
-                icon: Icons.replay_10_rounded,
-                onPressed: enabled ? () => _shortSeek(-10) : null,
+              _seekButton(
+                tooltip: l10n.player_back5,
+                seconds: _backSeconds,
+                forward: false,
+                onPressed: enabled ? () => _shortSeek(-_backSeconds) : null,
               ),
-              _button(
-                tooltip: l10n.player_forward10,
-                icon: Icons.forward_10_rounded,
-                onPressed: enabled ? () => _shortSeek(10) : null,
+              _seekButton(
+                tooltip: l10n.player_forward15,
+                seconds: _forwardSeconds,
+                forward: true,
+                onPressed: enabled ? () => _shortSeek(_forwardSeconds) : null,
+              ),
+              _seekButton(
+                tooltip: l10n.player_skipOpening,
+                seconds: _openingSeconds,
+                forward: true,
+                onPressed: enabled ? () => _shortSeek(_openingSeconds) : null,
               ),
               const SizedBox(width: 6),
               // 当前 / 总时长挨在一起。以前一个贴最左一个贴最右,宽屏上两个数字
@@ -239,6 +254,46 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
       ),
     );
   }
+
+  /// 跳转按钮:一圈箭头 + 中间的秒数,和 Material 自带的 replay_10 长一样。
+  /// 自己拼是因为内置只给了 5 / 10 / 30 三个数字 —— 秒数该由手感定,不该由
+  /// 图标库里恰好有哪几个数字定。
+  Widget _seekButton({
+    required String tooltip,
+    required int seconds,
+    required bool forward,
+    required VoidCallback? onPressed,
+  }) =>
+      IconButton(
+        tooltip: tooltip,
+        onPressed: onPressed,
+        color: Colors.white,
+        disabledColor: Colors.white24,
+        padding: EdgeInsets.zero,
+        visualDensity: VisualDensity.compact,
+        constraints: const BoxConstraints.tightFor(width: 38, height: 38),
+        icon: SizedBox.square(
+          dimension: 22,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Transform.flip(
+                flipX: !forward,
+                child: const Icon(Icons.refresh_rounded, size: 22),
+              ),
+              Text(
+                '$seconds',
+                style: const TextStyle(
+                  fontSize: 8.5,
+                  height: 1,
+                  fontWeight: FontWeight.w800,
+                  fontFeatures: [FontFeature.tabularFigures()],
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
 
   Widget _button({
     required String tooltip,

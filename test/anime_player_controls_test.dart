@@ -117,29 +117,48 @@ void main() {
 
   testWidgets('short seek clamps to the media boundaries', (tester) async {
     final seeks = <Duration>[];
-    await tester.pumpWidget(MaterialApp(
-      locale: const Locale('zh'),
-      supportedLocales: AppLocalizations.supportedLocales,
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
-      home: Scaffold(
-        body: AnimePlayerControls(
-          position: const Duration(seconds: 5),
-          duration: const Duration(seconds: 20),
-          playing: false,
-          buffering: false,
-          onPlayPause: () {},
-          onScrubStart: (_) {},
-          onSeek: (target, _) => seeks.add(target),
-          onOpenPanel: () {},
-          onFullscreen: () {},
-        ),
-      ),
+    await tester.pumpWidget(_seekHost(
+      position: const Duration(seconds: 8),
+      duration: const Duration(seconds: 20),
+      onSeek: seeks.add,
     ));
 
-    await tester.tap(find.byTooltip('后退 10 秒'));
-    await tester.tap(find.byTooltip('前进 10 秒'));
+    await tester.tap(find.byTooltip('后退 5 秒'));
+    await tester.tap(find.byTooltip('跳过片头(90 秒)'));
 
-    expect(seeks, [Duration.zero, const Duration(seconds: 15)]);
+    expect(seeks, [const Duration(seconds: 3), const Duration(seconds: 20)]);
+  });
+
+  // 等距的 ±10 会让人在两个点之间来回弹:退回去发现退多了,再前进又回到原处。
+  testWidgets('the seek steps are deliberately asymmetric', (tester) async {
+    final seeks = <Duration>[];
+    await tester.pumpWidget(_seekHost(
+      position: const Duration(minutes: 5),
+      duration: const Duration(minutes: 24),
+      onSeek: seeks.add,
+    ));
+
+    await tester.tap(find.byTooltip('后退 5 秒'));
+    await tester.tap(find.byTooltip('前进 15 秒'));
+
+    expect(seeks, [
+      const Duration(minutes: 4, seconds: 55),
+      const Duration(minutes: 5, seconds: 15),
+    ]);
+  });
+
+  // 90 秒是绝大多数番剧的 OP 长度 —— 一下按过去,代替自动识别片头。
+  testWidgets('one button jumps a whole opening', (tester) async {
+    final seeks = <Duration>[];
+    await tester.pumpWidget(_seekHost(
+      position: const Duration(seconds: 4),
+      duration: const Duration(minutes: 24),
+      onSeek: seeks.add,
+    ));
+
+    await tester.tap(find.byTooltip('跳过片头(90 秒)'));
+
+    expect(seeks, [const Duration(seconds: 94)]);
   });
 
   // 移动端播放页本来就是沉浸式全屏,给个按钮点了没反应比没有更糟。
@@ -202,6 +221,30 @@ Widget _controls({
           onPlayPause: () {},
           onScrubStart: (_) {},
           onSeek: (_, __) {},
+          onOpenPanel: () {},
+          onFullscreen: () {},
+        ),
+      ),
+    );
+
+Widget _seekHost({
+  required Duration position,
+  required Duration duration,
+  required ValueChanged<Duration> onSeek,
+}) =>
+    MaterialApp(
+      locale: const Locale('zh'),
+      supportedLocales: AppLocalizations.supportedLocales,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      home: Scaffold(
+        body: AnimePlayerControls(
+          position: position,
+          duration: duration,
+          playing: false,
+          buffering: false,
+          onPlayPause: () {},
+          onScrubStart: (_) {},
+          onSeek: (target, _) => onSeek(target),
           onOpenPanel: () {},
           onFullscreen: () {},
         ),
