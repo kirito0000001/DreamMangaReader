@@ -274,6 +274,14 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
   // 明确**不做**双击快进/快退:issue #16 说了那个不好用。
   static const Duration _controlsIdle = Duration(seconds: 5);
 
+  /// 横拖定位:划满一屏走多少时长。
+  static const Duration _seekSpan = Duration(minutes: 2);
+
+  /// chrome 进出的时长与曲线。淡入淡出的同时轻轻平移一下 —— 纯改透明度会让
+  /// 两条 chrome 像是「凭空出现」,带一点位移才像是从屏幕边上滑进来的。
+  static const Duration _chromeMotion = Duration(milliseconds: 220);
+  static const Curve _chromeCurve = Curves.easeOutCubic;
+
   // 跳转步长与底部控件保持一致:后退小、前进大,免得在两个点之间来回弹。
   static const int _backSeconds = 5;
   static const int _forwardSeconds = 15;
@@ -687,8 +695,11 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
   void _updateSeekDrag(double dx, double width) {
     final duration = _playback.duration;
     if (_dragTarget == null || duration <= Duration.zero || width <= 0) return;
-    // 全屏宽 = 整段时长的 40%,长片也能一次拖到位,短片又不会一碰就飞。
-    final deltaMs = dx / width * duration.inMilliseconds.toDouble() * .4;
+    // 按**固定时长**换算,不按片长的百分比。按百分比的话,一集越长手指越毒:
+    // 24 分钟的一集里划十分之一屏就是一分钟,想退回刚才那句台词根本停不住。
+    // 一屏两分钟是各家播放器的常见手感;短片另算,免得一屏就把整集划完。
+    final span = duration * 0.5 < _seekSpan ? duration * 0.5 : _seekSpan;
+    final deltaMs = dx / width * span.inMilliseconds.toDouble();
     final next = _dragTarget! + Duration(milliseconds: deltaMs.round());
     setState(() {
       _dragTarget = next < Duration.zero
@@ -780,8 +791,9 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
   // 亮度没实现的平台上整屏都归音量,总比左半边是块死区强。
   void _updateLevel(double dy, double height) {
     if (height <= 0) return;
-    // 六成屏高走完整个量程:再灵敏一点就容易手一抖静音。
-    final delta = -dy / (height * 0.6);
+    // 一整屏高走完整个量程。原来是六成屏高,手一抖就从正常听到静音 ——
+    // 调音量本来就该是个能停在中间的动作。
+    final delta = -dy / height;
     if (_adjustingBrightness) {
       _setBrightness((_brightness ?? 0) + delta);
     } else {
@@ -1056,22 +1068,25 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
                   ),
                 ),
               ),
-              if (_boosting) _boostBadge(),
-              if (_dragTarget != null) _seekBadge(),
-              if (_adjusting != null) _adjustBadge(_adjusting!),
+              _centreBadge(),
               if (!_locked) ...[
                 _chrome(top: true, child: _topBar()),
                 _chrome(top: false, child: _bottomBar()),
-                if (_quick != _QuickPanel.none && _controlsVisible)
-                  _quickPanelCard(),
+                _quickPanelSlot(),
               ],
               Positioned.fill(
                 child: IgnorePointer(
                   ignoring: !_controlsVisible,
-                  child: AnimatedOpacity(
-                    opacity: _controlsVisible ? 1 : 0,
-                    duration: const Duration(milliseconds: 180),
-                    child: _sideTools(),
+                  child: AnimatedSlide(
+                    offset: _controlsVisible ? Offset.zero : const Offset(.25, 0),
+                    duration: _chromeMotion,
+                    curve: _chromeCurve,
+                    child: AnimatedOpacity(
+                      opacity: _controlsVisible ? 1 : 0,
+                      duration: _chromeMotion,
+                      curve: _chromeCurve,
+                      child: _sideTools(),
+                    ),
                   ),
                 ),
               ),
@@ -1103,7 +1118,8 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     );
   }
 
-  /// 浮层 chrome:淡入淡出,隐藏时不吃点击(否则手势层收不到 tap)。
+  /// 浮层 chrome:淡入淡出 + 往屏幕边上退一点,隐藏时不吃点击(否则手势层
+  /// 收不到 tap)。
   Widget _chrome({required bool top, required Widget child}) => Positioned(
         left: 0,
         right: 0,
@@ -1111,10 +1127,16 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
         bottom: top ? null : 0,
         child: IgnorePointer(
           ignoring: !_controlsVisible,
-          child: AnimatedOpacity(
-            opacity: _controlsVisible ? 1 : 0,
-            duration: const Duration(milliseconds: 180),
-            child: child,
+          child: AnimatedSlide(
+            offset: _controlsVisible ? Offset.zero : Offset(0, top ? -.25 : .25),
+            duration: _chromeMotion,
+            curve: _chromeCurve,
+            child: AnimatedOpacity(
+              opacity: _controlsVisible ? 1 : 0,
+              duration: _chromeMotion,
+              curve: _chromeCurve,
+              child: child,
+            ),
           ),
         ),
       );
@@ -1350,26 +1372,47 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     _showControls();
   }
 
-  /// 右下角弹出的小卡片。贴着底栏上沿、右对齐,盖住的画面最少。
-  Widget _quickPanelCard() => Positioned(
+  /// 卡片的进出:从底栏上沿滑出来,收的时候滑回去。抽屉、卡片这些**带边界的
+  /// 面板**都该有来处,凭空浮现会让人一下找不到它是从哪儿开的。
+  Widget _quickPanelSlot() => Positioned(
         right: 12,
         bottom: 88,
-        child: SafeArea(
-          top: false,
-          child: Container(
-            constraints: const BoxConstraints(maxHeight: 260, maxWidth: 300),
-            decoration: BoxDecoration(
-              color: _panelBg.withValues(alpha: 0.96),
-              borderRadius: BorderRadius.circular(10),
+        child: AnimatedSwitcher(
+          duration: _chromeMotion,
+          switchInCurve: _chromeCurve,
+          switchOutCurve: _chromeCurve,
+          transitionBuilder: (child, animation) => FadeTransition(
+            opacity: animation,
+            child: SlideTransition(
+              position: Tween<Offset>(
+                begin: const Offset(0, .12),
+                end: Offset.zero,
+              ).animate(animation),
+              child: child,
             ),
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: switch (_quick) {
-              _QuickPanel.rate => _quickRates(),
-              _QuickPanel.quality => _quickQualities(),
-              _QuickPanel.episodes => _quickEpisodes(),
-              _QuickPanel.none => const SizedBox.shrink(),
-            },
           ),
+          child: _quick != _QuickPanel.none && _controlsVisible
+              ? KeyedSubtree(key: ValueKey(_quick), child: _quickPanelCard())
+              : const SizedBox.shrink(key: ValueKey('player-no-quick')),
+        ),
+      );
+
+  /// 右下角弹出的小卡片。贴着底栏上沿、右对齐,盖住的画面最少。
+  Widget _quickPanelCard() => SafeArea(
+        top: false,
+        child: Container(
+          constraints: const BoxConstraints(maxHeight: 260, maxWidth: 300),
+          decoration: BoxDecoration(
+            color: _panelBg.withValues(alpha: 0.96),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: switch (_quick) {
+            _QuickPanel.rate => _quickRates(),
+            _QuickPanel.quality => _quickQualities(),
+            _QuickPanel.episodes => _quickEpisodes(),
+            _QuickPanel.none => const SizedBox.shrink(),
+          },
         ),
       );
 
@@ -1588,6 +1631,25 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
         value.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), '_');
     final at = _formatClock(_playback.position).replaceAll(':', '-');
     return '${safe(widget.animeTitle)}_${safe(_ep.name)}_$at.jpg';
+  }
+
+  /// 画面中央那颗胶囊只有一个位置,谁在说话谁占着。切换和进出都带过渡 ——
+  /// 硬生生地闪一下,比不显示还让人分神。
+  Widget _centreBadge() {
+    final Widget badge = switch (null) {
+      _ when _dragTarget != null => _seekBadge(),
+      _ when _adjusting != null => _adjustBadge(_adjusting!),
+      _ when _boosting => _boostBadge(),
+      _ => const SizedBox.shrink(key: ValueKey('player-no-badge')),
+    };
+    return IgnorePointer(
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 140),
+        switchInCurve: _chromeCurve,
+        switchOutCurve: _chromeCurve,
+        child: badge,
+      ),
+    );
   }
 
   Widget _boostBadge() => Align(

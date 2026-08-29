@@ -682,6 +682,83 @@ void main() {
     expect(adapter.seeks, hasLength(before));
   });
 
+  // 定位按固定时长换算,不按片长的百分比。按百分比的话手指在长片里就是毒的:
+  // 同一段位移,10 分钟的一集走 40 秒,24 分钟的一集要走一分半,想退回刚才那句
+  // 台词根本停不住。现在无论多长的一集,划满一屏都是两分钟。
+  testWidgets('a swipe covers a fixed span, not a share of the episode',
+      (tester) async {
+    final adapter = _PageFakeAdapter();
+    await tester.pumpWidget(_playerHost(adapter));
+    await tester.pump();
+    adapter.durationController.add(const Duration(minutes: 40));
+    adapter.positionController.add(const Duration(minutes: 5));
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    final surface = find.byType(AnimePlaybackSurface);
+    final width = tester.getSize(surface).width;
+    final gesture = await tester.startGesture(tester.getCenter(surface));
+    await tester.pump(const Duration(milliseconds: 40));
+    for (var step = 0; step < 4; step++) {
+      await gesture.moveBy(const Offset(50, 0));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await gesture.up();
+    await tester.pump();
+
+    final moved = adapter.seeks.last - const Duration(minutes: 5);
+    final expected = 200 / width * const Duration(minutes: 2).inMilliseconds;
+    expect(moved.inMilliseconds, closeTo(expected, 900));
+  });
+
+  // 很短的片子另算:一屏两分钟会让三分钟的片子一划就到头。
+  testWidgets('a very short clip scales the sweep down to stay usable',
+      (tester) async {
+    final adapter = _PageFakeAdapter();
+    await tester.pumpWidget(_playerHost(adapter));
+    await tester.pump();
+    adapter.durationController.add(const Duration(minutes: 2));
+    adapter.positionController.add(const Duration(seconds: 30));
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    final surface = find.byType(AnimePlaybackSurface);
+    final width = tester.getSize(surface).width;
+    final gesture = await tester.startGesture(tester.getCenter(surface));
+    await tester.pump(const Duration(milliseconds: 40));
+    await gesture.moveBy(Offset(width / 2, 0));
+    await tester.pump(const Duration(milliseconds: 16));
+    await gesture.up();
+    await tester.pump();
+
+    // 半屏 = 量程的一半 = 片长的四分之一,而不是直接冲到片尾。
+    final moved = adapter.seeks.last - const Duration(seconds: 30);
+    expect(moved, lessThan(const Duration(seconds: 40)));
+    expect(moved, greaterThan(const Duration(seconds: 20)));
+  });
+
+  // 一整屏高走完整个量程。原来是六成屏高,手一抖就从正常听到静音。
+  testWidgets('half a screen of vertical travel moves half the volume',
+      (tester) async {
+    final adapter = _PageFakeAdapter();
+    await tester.pumpWidget(_playerHost(adapter));
+    await tester.pump();
+    adapter.durationController.add(const Duration(minutes: 24));
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    final surface = find.byType(AnimePlaybackSurface);
+    final height = tester.getSize(surface).height;
+    final gesture = await tester.startGesture(tester.getCenter(surface));
+    await tester.pump(const Duration(milliseconds: 40));
+    await gesture.moveBy(Offset(0, height / 2));
+    await tester.pump(const Duration(milliseconds: 16));
+    await gesture.up();
+    await tester.pump();
+
+    expect(adapter.volumes.last, closeTo(50, 6));
+  });
+
   testWidgets('finishing an episode rolls on to the next one', (tester) async {
     final adapter = _PageFakeAdapter();
     final loaded = <String>[];
