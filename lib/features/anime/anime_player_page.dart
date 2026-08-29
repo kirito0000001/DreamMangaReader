@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' hide VideoTrack; // 用本项目的 VideoTrack
 import 'package:media_kit_video/media_kit_video.dart';
+import 'package:path_provider/path_provider.dart';
 // media_kit_video 本来就依赖它(MaterialVideoControls 的亮度手势用的同一套),
 // 这里提为直接依赖只是为了自己调用。安卓有原生实现,别的平台调了会抛,已 catch。
 import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
@@ -281,6 +282,18 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
 
   bool _controlsVisible = true;
   Timer? _controlsTimer;
+
+  /// 锁屏:所有 chrome 收起、所有手势失效,只留一颗解锁键。横屏看番时口袋、
+  /// 手掌、袖子都在往屏幕上蹭,一蹭就跳进度是最恼人的一种。
+  bool _locked = false;
+
+  /// 双指变换出来的画面姿态。默认值 = 没动过,还原键也就不出现。
+  _PictureTransform _picture = _PictureTransform.none;
+  _PictureTransform _pictureAtGestureStart = _PictureTransform.none;
+
+  /// 这一次手势认的是哪件事。单指时按第一段位移的方向定,定了就不再改 ——
+  /// 中途换轴会让一个手势同时改进度和音量。
+  _Gesture _gesture = _Gesture.none;
   bool _boosting = false;
   Duration? _dragTarget; // 横向拖动定位时的预览位置
   Duration _dragOrigin = Duration.zero;
@@ -569,7 +582,97 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     _scheduleHideControls();
   }
 
-  void _onHorizontalDragStart(DragStartDetails details) {
+  void _onSurfaceTap() {
+    // 锁上之后点画面只把解锁键叫出来 —— 否则锁上就再也解不开了。
+    if (_locked) {
+      _toggleControls();
+      return;
+    }
+    // 卡片开着的时候,点画面先收卡片 —— 和点外面关菜单是一个意思,不该顺手
+    // 把整层 chrome 也一起收了。
+    if (_quick != _QuickPanel.none) {
+      setState(() => _quick = _QuickPanel.none);
+      _showControls();
+      return;
+    }
+    _toggleControls();
+  }
+
+  void _onScaleStart(ScaleStartDetails details, double width) {
+    if (_locked) return;
+    _pictureAtGestureStart = _picture;
+    if (details.pointerCount >= 2) {
+      _gesture = _Gesture.picture;
+      return;
+    }
+    // 单指:等第一段位移出来再决定是定位还是调音量 —— 起手那一刻还看不出来。
+    _gesture = _Gesture.undecided;
+    _adjustingBrightness =
+        _brightness != null && details.localFocalPoint.dx < width / 2;
+  }
+
+  void _onScaleUpdate(ScaleUpdateDetails details, double width, double height) {
+    if (_locked) return;
+    if (details.pointerCount >= 2) {
+      _gesture = _Gesture.picture;
+      _updatePicture(details);
+      return;
+    }
+    if (_gesture == _Gesture.picture) return;
+    final delta = details.focalPointDelta;
+    if (_gesture == _Gesture.undecided) {
+      // 别在原地抖两下就认了方向:先走够 6 逻辑像素再定。
+      if (delta.distance < 6) return;
+      if (delta.dx.abs() > delta.dy.abs()) {
+        _gesture = _Gesture.seek;
+        _beginSeekDrag();
+      } else {
+        _gesture = _Gesture.level;
+        _controlsTimer?.cancel();
+      }
+    }
+    switch (_gesture) {
+      case _Gesture.seek:
+        _updateSeekDrag(delta.dx, width);
+      case _Gesture.level:
+        _updateLevel(delta.dy, height);
+      case _Gesture.undecided || _Gesture.picture || _Gesture.none:
+        break;
+    }
+  }
+
+  void _onScaleEnd() {
+    switch (_gesture) {
+      case _Gesture.seek:
+        _endSeekDrag();
+      case _Gesture.level || _Gesture.undecided:
+        _scheduleHideControls();
+      case _Gesture.picture || _Gesture.none:
+        break;
+    }
+    _gesture = _Gesture.none;
+  }
+
+  /// 双指:平移 + 缩放 + 旋转,一起攒在 [_picture] 上。B站手机端就是这套,
+  /// 用来把带黑边的片源怼满屏幕,或者把歪着压制的片子扳正。
+  void _updatePicture(ScaleUpdateDetails details) {
+    setState(() {
+      _picture = _picture.applyGesture(
+        base: _pictureAtGestureStart,
+        scale: details.scale,
+        rotation: details.rotation,
+        panDelta: details.focalPointDelta,
+      );
+    });
+    _showControls();
+  }
+
+  void _resetPicture() {
+    setState(() => _picture = _PictureTransform.none);
+    _showControls();
+  }
+
+  void _beginSeekDrag() {
     if (_playback.duration <= Duration.zero) return;
     _dragOrigin = _playback.position;
     _dragWasPlaying = _playing;
@@ -581,12 +684,11 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     if (_dragWasPlaying) unawaited(_adapter?.pause());
   }
 
-  void _onHorizontalDragUpdate(DragUpdateDetails details, double width) {
+  void _updateSeekDrag(double dx, double width) {
     final duration = _playback.duration;
     if (_dragTarget == null || duration <= Duration.zero || width <= 0) return;
     // 全屏宽 = 整段时长的 40%,长片也能一次拖到位,短片又不会一碰就飞。
-    final deltaMs =
-        details.delta.dx / width * duration.inMilliseconds.toDouble() * .4;
+    final deltaMs = dx / width * duration.inMilliseconds.toDouble() * .4;
     final next = _dragTarget! + Duration(milliseconds: deltaMs.round());
     setState(() {
       _dragTarget = next < Duration.zero
@@ -597,7 +699,7 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     });
   }
 
-  void _onHorizontalDragEnd() {
+  void _endSeekDrag() {
     final target = _dragTarget;
     if (target == null) return;
     setState(() => _dragTarget = null);
@@ -676,24 +778,16 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
 
   // —— 竖向拖动:左半屏亮度、右半屏音量(B站/YouTube 那套)——
   // 亮度没实现的平台上整屏都归音量,总比左半边是块死区强。
-  void _onVerticalDragStart(DragStartDetails details, double width) {
-    _adjustingBrightness =
-        _brightness != null && details.localPosition.dx < width / 2;
-    _controlsTimer?.cancel();
-  }
-
-  void _onVerticalDragUpdate(DragUpdateDetails details, double height) {
+  void _updateLevel(double dy, double height) {
     if (height <= 0) return;
     // 六成屏高走完整个量程:再灵敏一点就容易手一抖静音。
-    final delta = -details.delta.dy / (height * 0.6);
+    final delta = -dy / (height * 0.6);
     if (_adjustingBrightness) {
       _setBrightness((_brightness ?? 0) + delta);
     } else {
       _setVolume(_volume + delta * 100);
     }
   }
-
-  void _onVerticalDragEnd() => _scheduleHideControls();
 
   void _onPointerSignal(PointerSignalEvent event) {
     // 桌面滚轮 = 音量,和大多数播放器一致。
@@ -943,42 +1037,44 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
               Positioned.fill(
                 child: Listener(
                   onPointerSignal: _onPointerSignal,
+                  // 一个 scale 识别器管所有拖动。GestureDetector 不许 scale
+                  // 和横竖两个 drag 并存(scale 会把它们全吃掉),而双指缩放
+                  // 又只有 scale 报得出 pointerCount —— 那就由这里按手指数
+                  // 自己分发:一根手指还是定位 / 音量 / 亮度,两根才是变换画面。
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: () {
-                      // 卡片开着的时候,点画面先收卡片 —— 和点外面关菜单是
-                      // 一个意思,不该顺手把整层 chrome 也一起收了。
-                      if (_quick != _QuickPanel.none) {
-                        setState(() => _quick = _QuickPanel.none);
-                        _showControls();
-                        return;
-                      }
-                      _toggleControls();
-                    },
+                    onTap: _onSurfaceTap,
+                    onDoubleTap: _locked ? null : _togglePlay,
                     onLongPressStart: (_) => _startBoost(),
                     onLongPressEnd: (_) => _stopBoost(),
                     onLongPressCancel: _stopBoost,
-                    onHorizontalDragStart: _onHorizontalDragStart,
-                    onHorizontalDragUpdate: (details) =>
-                        _onHorizontalDragUpdate(details, constraints.maxWidth),
-                    onHorizontalDragEnd: (_) => _onHorizontalDragEnd(),
-                    onHorizontalDragCancel: _onHorizontalDragEnd,
-                    onVerticalDragStart: (details) =>
-                        _onVerticalDragStart(details, constraints.maxWidth),
-                    onVerticalDragUpdate: (details) =>
-                        _onVerticalDragUpdate(details, constraints.maxHeight),
-                    onVerticalDragEnd: (_) => _onVerticalDragEnd(),
-                    onVerticalDragCancel: _onVerticalDragEnd,
+                    onScaleStart: (details) =>
+                        _onScaleStart(details, constraints.maxWidth),
+                    onScaleUpdate: (details) => _onScaleUpdate(
+                        details, constraints.maxWidth, constraints.maxHeight),
+                    onScaleEnd: (_) => _onScaleEnd(),
                   ),
                 ),
               ),
               if (_boosting) _boostBadge(),
               if (_dragTarget != null) _seekBadge(),
               if (_adjusting != null) _adjustBadge(_adjusting!),
-              _chrome(top: true, child: _topBar()),
-              _chrome(top: false, child: _bottomBar()),
-              if (_quick != _QuickPanel.none && _controlsVisible)
-                _quickPanelCard(),
+              if (!_locked) ...[
+                _chrome(top: true, child: _topBar()),
+                _chrome(top: false, child: _bottomBar()),
+                if (_quick != _QuickPanel.none && _controlsVisible)
+                  _quickPanelCard(),
+              ],
+              Positioned.fill(
+                child: IgnorePointer(
+                  ignoring: !_controlsVisible,
+                  child: AnimatedOpacity(
+                    opacity: _controlsVisible ? 1 : 0,
+                    duration: const Duration(milliseconds: 180),
+                    child: _sideTools(),
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -995,8 +1091,16 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     final video = _videoBuilder?.call(_aspect.boxFit) ??
         const ColoredBox(color: Colors.black);
     final ratio = _aspect.ratio;
-    if (ratio == null) return video;
-    return Center(child: AspectRatio(aspectRatio: ratio, child: video));
+    final framed =
+        ratio == null ? video : Center(child: AspectRatio(aspectRatio: ratio, child: video));
+    if (_picture.isIdentity) return framed;
+    return Transform.translate(
+      offset: _picture.offset,
+      child: Transform.rotate(
+        angle: _picture.rotation,
+        child: Transform.scale(scale: _picture.scale, child: framed),
+      ),
+    );
   }
 
   /// 浮层 chrome:淡入淡出,隐藏时不吃点击(否则手势层收不到 tap)。
@@ -1367,6 +1471,125 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
         ),
       );
 
+  /// 屏幕右侧中间那一竖排。放这儿是因为横屏时两只手都在屏幕两侧,拇指够得着,
+  /// 而上下两条 chrome 都得挪一下手。
+  Widget _sideTools() {
+    final l10n = context.l10n;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Padding(
+        padding: const EdgeInsets.only(right: 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (!_locked) ...[
+              _sideButton(
+                icon: Icons.photo_camera_rounded,
+                tooltip: l10n.player_screenshot,
+                onTap: _takeScreenshot,
+              ),
+              const SizedBox(height: 10),
+            ],
+            _sideButton(
+              icon: _locked ? Icons.lock_rounded : Icons.lock_open_rounded,
+              tooltip: _locked ? l10n.player_unlock : l10n.player_lock,
+              onTap: _toggleLock,
+            ),
+            if (!_locked && !_picture.isIdentity) ...[
+              const SizedBox(height: 10),
+              _sideButton(
+                icon: Icons.restart_alt_rounded,
+                tooltip: l10n.player_resetPicture,
+                onTap: _resetPicture,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _sideButton({
+    required IconData icon,
+    required String tooltip,
+    required VoidCallback onTap,
+  }) =>
+      Material(
+        color: Colors.black.withValues(alpha: 0.42),
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: IconButton(
+          tooltip: tooltip,
+          icon: Icon(icon),
+          color: Colors.white,
+          iconSize: 22,
+          constraints: const BoxConstraints.tightFor(width: 44, height: 44),
+          padding: EdgeInsets.zero,
+          visualDensity: VisualDensity.standard,
+          onPressed: onTap,
+        ),
+      );
+
+  void _toggleLock() {
+    setState(() {
+      _locked = !_locked;
+      if (_locked) _quick = _QuickPanel.none;
+    });
+    unawaited(HapticFeedback.lightImpact());
+    _showControls();
+  }
+
+  /// 存一张当前画面。
+  ///
+  /// 走 mpv 自己的 screenshot:它拿的是解码后的那一帧,截得到画面本身,而 Flutter
+  /// 侧的 RepaintBoundary 只能截到一块由平台纹理占位的空矩形。
+  Future<void> _takeScreenshot() async {
+    _showControls();
+    final l10n = context.l10n;
+    final player = _nativePlayer;
+    if (player == null) return;
+    try {
+      final bytes = await player.screenshot();
+      if (bytes == null || bytes.isEmpty) {
+        throw StateError(l10n.player_screenshotEmpty);
+      }
+      final directory = await _screenshotDirectory();
+      final file = File(
+          '${directory.path}${Platform.pathSeparator}${_screenshotName()}');
+      await file.writeAsBytes(bytes, flush: true);
+      if (!mounted) return;
+      showAppNotify(context, l10n.player_screenshotSaved(file.path),
+          kind: AppNotifyKind.success);
+    } catch (error) {
+      if (!mounted) return;
+      showAppNotify(context, l10n.player_screenshotFailed('$error'),
+          kind: AppNotifyKind.error);
+    }
+  }
+
+  /// 截图落在应用自己的目录下的 ScreenShot 里。
+  ///
+  /// 不往系统相册塞:那要 MediaStore 或者一整套存储权限,而截图这件事不值得
+  /// 让整个 App 去要那个权限。存完把完整路径报出来,找得到就行。
+  Future<Directory> _screenshotDirectory() async {
+    final base = Platform.isAndroid
+        ? await getExternalStorageDirectory() ??
+            await getApplicationDocumentsDirectory()
+        : await getDownloadsDirectory() ??
+            await getApplicationDocumentsDirectory();
+    final directory =
+        Directory('${base.path}${Platform.pathSeparator}ScreenShot');
+    if (!await directory.exists()) await directory.create(recursive: true);
+    return directory;
+  }
+
+  String _screenshotName() {
+    String safe(String value) =>
+        value.replaceAll(RegExp(r'[\\/:*?"<>|\s]+'), '_');
+    final at = _formatClock(_playback.position).replaceAll(':', '-');
+    return '${safe(widget.animeTitle)}_${safe(_ep.name)}_$at.jpg';
+  }
+
   Widget _boostBadge() => Align(
         alignment: const Alignment(0, -0.55),
         child: _PlayerBadge(
@@ -1733,6 +1956,43 @@ enum PlayerAspect {
 
 /// 右下角三颗按钮各自弹出的小卡片。
 enum _QuickPanel { none, episodes, rate, quality }
+
+/// 一次拖动认的是哪件事。单指起手时还看不出来,所以先 [undecided],
+/// 走够一段再定;定了就不再改 —— 中途换轴会让一个手势同时改进度和音量。
+enum _Gesture { none, undecided, seek, level, picture }
+
+/// 双指摆出来的画面姿态:平移 + 缩放 + 旋转。
+class _PictureTransform {
+  const _PictureTransform({
+    this.scale = 1,
+    this.rotation = 0,
+    this.offset = Offset.zero,
+  });
+
+  static const none = _PictureTransform();
+
+  final double scale;
+  final double rotation;
+  final Offset offset;
+
+  bool get isIdentity =>
+      scale == 1 && rotation == 0 && offset == Offset.zero;
+
+  /// [base] 是这次手势起手时的姿态。缩放和旋转由 ScaleUpdateDetails **累计**
+  /// 报出(从起手算起),所以叠在 base 上;位移是**增量**报的,只能一段段往
+  /// 当前姿态上加。缩放夹在 0.5–4 之间:再小画面就没了,再大全是马赛克。
+  _PictureTransform applyGesture({
+    required _PictureTransform base,
+    required double scale,
+    required double rotation,
+    required Offset panDelta,
+  }) =>
+      _PictureTransform(
+        scale: (base.scale * scale).clamp(0.5, 4.0),
+        rotation: base.rotation + rotation,
+        offset: offset + panDelta,
+      );
+}
 
 /// 竖向拖动 / 键盘调节音量亮度时,中央胶囊要显示的一次读数。
 class _Adjustment {

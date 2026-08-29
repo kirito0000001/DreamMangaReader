@@ -1322,6 +1322,23 @@
   "player_forward15": "前进 15 秒",
   "player_skipOpening": "跳过片头(90 秒)",
   "player_options": "播放选项",
+  "player_screenshot": "截屏",
+  "player_screenshotSaved": "截图已保存到 {path}",
+  "@player_screenshotSaved": {
+    "placeholders": {
+      "path": { "type": "String" }
+    }
+  },
+  "player_screenshotFailed": "截图失败:{error}",
+  "@player_screenshotFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "player_screenshotEmpty": "播放器没给出画面",
+  "player_lock": "锁定屏幕",
+  "player_unlock": "解锁屏幕",
+  "player_resetPicture": "还原画面",
   "player_downloadEpisode": "下载这一集",
   "player_downloadQueued": "已加入下载队列",
   "player_alreadyDownloaded": "这一集已经下载过了",

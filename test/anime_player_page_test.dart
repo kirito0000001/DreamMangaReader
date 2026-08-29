@@ -12,6 +12,7 @@ import 'package:dream_manga_reader/features/anime/playback/playback_session_cont
 import 'package:dream_manga_reader/features/anime/playback/playback_state.dart';
 import 'package:dream_manga_reader/features/anime/playback/player_adapter.dart';
 import 'package:dream_manga_reader/features/anime/playback/subtitle_option.dart';
+import 'package:flutter/gestures.dart' show kDoubleTapMinTime;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -402,6 +403,8 @@ void main() {
     expect(find.text('0.5x'), findsOneWidget);
 
     await tester.tapAt(const Offset(200, 200));
+    // 双击暂停装上之后,单击要等双击的判定窗口过去才落地。
+    await tester.pump(const Duration(milliseconds: 400));
     await tester.pumpAndSettle();
 
     expect(find.text('0.5x'), findsNothing);
@@ -438,6 +441,102 @@ void main() {
     final framed = tester.widget<AspectRatio>(find.byType(AspectRatio));
     expect(framed.aspectRatio, closeTo(16 / 9, 0.001));
     expect(fits.last, BoxFit.cover);
+  });
+
+  testWidgets('a double tap pauses and the next one resumes', (tester) async {
+    final adapter = _PageFakeAdapter();
+    await tester.pumpWidget(_playerHost(adapter));
+    await tester.pump();
+    adapter.durationController.add(const Duration(minutes: 24));
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    Future<void> doubleTap() async {
+      await tester.tapAt(const Offset(300, 200));
+      // 两下之间要隔开 kDoubleTapMinTime,否则第二下会被当成同一下的重复事件。
+      await tester.pump(kDoubleTapMinTime);
+      await tester.tapAt(const Offset(300, 200));
+      await tester.pumpAndSettle();
+    }
+
+    final pauses = adapter.pauseCalls;
+    await doubleTap();
+    expect(adapter.pauseCalls, greaterThan(pauses));
+
+    adapter.playingController.add(false);
+    await tester.pump();
+    final plays = adapter.playCalls;
+    await doubleTap();
+    expect(adapter.playCalls, plays + 1);
+  });
+
+  // 横屏看番时口袋、手掌、袖子都在往屏幕上蹭 —— 一蹭就跳进度是最恼人的一种。
+  testWidgets('locking takes the chrome away and stops the gestures',
+      (tester) async {
+    final adapter = _PageFakeAdapter();
+    await tester.pumpWidget(_playerHost(adapter));
+    await tester.pump();
+    adapter.durationController.add(const Duration(minutes: 24));
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('锁定屏幕'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('倍速'), findsNothing);
+    expect(find.byTooltip('解锁屏幕'), findsOneWidget);
+
+    // 锁上之后横拖不该动进度。
+    final seeks = adapter.seeks.length;
+    await tester.drag(find.byType(AnimePlaybackSurface), const Offset(220, 0));
+    await tester.pumpAndSettle();
+    expect(adapter.seeks, hasLength(seeks));
+
+    await tester.tap(find.byTooltip('解锁屏幕'));
+    await tester.pumpAndSettle();
+    expect(find.text('倍速'), findsOneWidget);
+  });
+
+  // 双指摆过画面之后得有路回去 —— 不然歪着的画面就一直歪着。
+  testWidgets('a two-finger zoom offers a way back to the original picture',
+      (tester) async {
+    final adapter = _PageFakeAdapter();
+    await tester.pumpWidget(_playerHost(
+      adapter,
+      videoBuilder: (_) => const ColoredBox(
+        key: ValueKey('host-video'),
+        color: Colors.black,
+      ),
+    ));
+    await tester.pump();
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    Finder wrappers() => find.ancestor(
+          of: find.byKey(const ValueKey('host-video')),
+          matching: find.byType(Transform),
+        );
+    final before = wrappers().evaluate().length;
+    expect(find.byTooltip('还原画面'), findsNothing);
+
+    final centre = tester.getCenter(find.byType(AnimePlaybackSurface));
+    final first = await tester.startGesture(centre - const Offset(40, 0));
+    final second = await tester.startGesture(centre + const Offset(40, 0));
+    await first.moveBy(const Offset(-60, 0));
+    await second.moveBy(const Offset(60, 0));
+    await tester.pump();
+    await first.up();
+    await second.up();
+    await tester.pumpAndSettle();
+
+    // 平移 + 旋转 + 缩放三层,画面确实被套起来了。
+    expect(wrappers().evaluate().length, greaterThan(before));
+    expect(find.byTooltip('还原画面'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('还原画面'));
+    await tester.pumpAndSettle();
+    expect(find.byTooltip('还原画面'), findsNothing);
+    expect(wrappers().evaluate().length, before);
   });
 
   testWidgets('complete offline episode bypasses online track resolution',
