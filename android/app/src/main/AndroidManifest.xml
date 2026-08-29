@@ -9,6 +9,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 截图落 DCIM。Android 10 起 MediaStore 自己管权限,这条只对更老的系统有效,
+         所以钉死 maxSdkVersion —— 新系统上它根本不会出现在权限列表里。 -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
     <application
         android:label="Dream Manga Reader"
         android:name="${applicationName}"

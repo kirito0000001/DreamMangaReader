@@ -4,6 +4,7 @@ import android.content.Intent
 import android.os.Build
 import android.view.KeyEvent
 import com.dreammoon.dream_manga_reader.downloads.ContentDownloadBridge
+import com.dreammoon.dream_manga_reader.gallery.GalleryBridge
 import com.dreammoon.dream_manga_reader.update.UpdateDownloadBridge
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -18,6 +19,7 @@ class MainActivity : FlutterActivity() {
     private var platformChannel: MethodChannel? = null
     private var updateBridge: UpdateDownloadBridge? = null
     private var contentDownloadBridge: ContentDownloadBridge? = null
+    private var galleryBridge: GalleryBridge? = null
     private var volumeKeyPaging = false
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -46,6 +48,7 @@ class MainActivity : FlutterActivity() {
         }
         updateBridge = UpdateDownloadBridge(this).also { it.configure(flutterEngine) }
         contentDownloadBridge = ContentDownloadBridge(this).also { it.configure(flutterEngine) }
+        galleryBridge = GalleryBridge(this).also { it.configure(flutterEngine) }
     }
 
     override fun onResume() {
@@ -72,7 +75,9 @@ class MainActivity : FlutterActivity() {
         val handled = contentDownloadBridge?.onRequestPermissionsResult(
             requestCode,
             grantResults,
-        ) == true || updateBridge?.onRequestPermissionsResult(requestCode, grantResults) == true
+        ) == true ||
+            updateBridge?.onRequestPermissionsResult(requestCode, grantResults) == true ||
+            galleryBridge?.onRequestPermissionsResult(requestCode, grantResults) == true
         if (!handled) {
             super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         }
@@ -83,6 +88,8 @@ class MainActivity : FlutterActivity() {
         updateBridge = null
         contentDownloadBridge?.dispose()
         contentDownloadBridge = null
+        galleryBridge?.dispose()
+        galleryBridge = null
         super.onDestroy()
     }
 

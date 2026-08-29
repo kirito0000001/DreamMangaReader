@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
 
 import '../../core/l10n/app_strings.dart';
+import '../../core/platform/android_gallery_bridge.dart';
 import '../../core/platform/window_fullscreen.dart';
 import '../../core/source/models.dart';
 import '../../core/source/source.dart';
@@ -269,6 +270,7 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
   double? _brightness;
 
   final FocusNode _focus = FocusNode(debugLabel: 'anime-player');
+  final AndroidGalleryBridge _gallery = AndroidGalleryBridge();
 
   // —— 手势与控件层(B站/YouTube 那套:全屏占满、点一下出控件、长按倍速快进)——
   // 明确**不做**双击快进/快退:issue #16 说了那个不好用。
@@ -1596,12 +1598,12 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
       if (bytes == null || bytes.isEmpty) {
         throw StateError(l10n.player_screenshotEmpty);
       }
-      final directory = await _screenshotDirectory();
-      final file = File(
-          '${directory.path}${Platform.pathSeparator}${_screenshotName()}');
-      await file.writeAsBytes(bytes, flush: true);
+      final name = _screenshotName();
+      // 安卓交给相册。别的平台没有相册这个概念,落自己的 ScreenShot 目录。
+      final album = await _gallery.saveImage(bytes: bytes, fileName: name);
+      final where = album ?? await _writeScreenshotFile(bytes, name);
       if (!mounted) return;
-      showAppNotify(context, l10n.player_screenshotSaved(file.path),
+      showAppNotify(context, l10n.player_screenshotSaved(where),
           kind: AppNotifyKind.success);
     } catch (error) {
       if (!mounted) return;
@@ -1610,20 +1612,16 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     }
   }
 
-  /// 截图落在应用自己的目录下的 ScreenShot 里。
-  ///
-  /// 不往系统相册塞:那要 MediaStore 或者一整套存储权限,而截图这件事不值得
-  /// 让整个 App 去要那个权限。存完把完整路径报出来,找得到就行。
-  Future<Directory> _screenshotDirectory() async {
-    final base = Platform.isAndroid
-        ? await getExternalStorageDirectory() ??
-            await getApplicationDocumentsDirectory()
-        : await getDownloadsDirectory() ??
-            await getApplicationDocumentsDirectory();
+  /// 桌面端的落点:下载目录下的 ScreenShot。返回完整路径,好让提示里说得清楚。
+  Future<String> _writeScreenshotFile(Uint8List bytes, String name) async {
+    final base = await getDownloadsDirectory() ??
+        await getApplicationDocumentsDirectory();
     final directory =
         Directory('${base.path}${Platform.pathSeparator}ScreenShot');
     if (!await directory.exists()) await directory.create(recursive: true);
-    return directory;
+    final file = File('${directory.path}${Platform.pathSeparator}$name');
+    await file.writeAsBytes(bytes, flush: true);
+    return file.path;
   }
 
   String _screenshotName() {
