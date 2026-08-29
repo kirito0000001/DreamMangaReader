@@ -39,6 +39,8 @@ class PlaybackSessionController {
     this.coldStartStallThreshold = const Duration(seconds: 24),
     this.stableResetThreshold = const Duration(seconds: 15),
     this.resumeConfirmationTimeout = const Duration(seconds: 20),
+    this.timelineResetTolerance = const Duration(seconds: 5),
+    this.maxTimelineReanchors = 3,
   })  : _player = player,
         _tracks = tracks,
         _delay = delay ?? Future<void>.delayed {
@@ -83,6 +85,15 @@ class PlaybackSessionController {
   /// 否则进度条会一直停在一个视频根本没到过的时间上。
   final Duration resumeConfirmationTimeout;
 
+  /// 位置往回跳超过这个幅度,又没有任何 seek 在飞,那就不是「在播」,是时间轴被
+  /// 换掉了 —— HLS 拼进广告段会带一个重置的 PTS,ffmpeg 从新基准开始报,位置
+  /// 一下掉回 0。播放本身永远往前走,几百毫秒的抖动都算不上往回。
+  final Duration timelineResetTolerance;
+
+  /// 同一次开流里最多把观众拽回原位几次。追不回来就认下新时间轴,总比跟流对着
+  /// seek 到天荒地老强。
+  final int maxTimelineReanchors;
+
   final _states = StreamController<PlaybackState>.broadcast(sync: true);
   final List<StreamSubscription<Object?>> _subscriptions = [];
 
@@ -93,6 +104,11 @@ class PlaybackSessionController {
   List<VideoTrack> _available = const [];
   VideoTrack? _selected;
   Duration _confirmedPosition = Duration.zero;
+
+  /// 播放器上一次报的原始位置,不管信不信它。认命的时候要拿它当落点 —— 不然
+  /// 「放弃追断点」之后,断点还留在 [_confirmedPosition] 里,时间轴那道判断会
+  /// 立刻拿它再把观众拽一次,等于没认。
+  Duration _observedPosition = Duration.zero;
   Duration? _pendingSeekTarget;
   Duration _duration = Duration.zero;
   int? _reportedPositionSecond;
@@ -105,6 +121,7 @@ class PlaybackSessionController {
   Duration? _resumeTarget;
   Timer? _resumeTimer;
   bool _resumeReissued = false;
+  int _timelineReanchors = 0;
   int _generation = 0;
   int _seekGeneration = 0;
   int _recoveryRound = 0;
@@ -131,6 +148,7 @@ class PlaybackSessionController {
     _resumeAfterSeek = false;
     _pendingSeekTarget = null;
     _clearResume();
+    _timelineReanchors = 0;
     _recoveryRound = 0;
     final knownDuration = _duration;
     _confirmedPosition = _resumePosition(initialPosition, knownDuration);
@@ -231,8 +249,18 @@ class PlaybackSessionController {
     }
     _resumeTarget = target;
     _resumeTimer = Timer(resumeConfirmationTimeout, () {
-      if (_isCurrent(generation)) _clearResume();
+      if (!_isCurrent(generation)) return;
+      _clearResume();
+      _acceptObservedPosition();
     });
+  }
+
+  /// 认下播放器真正在的位置。追不到断点时用:进度条宁可跳到一个不想要的时间,
+  /// 也不能停在一个流里根本不存在的时间上。
+  void _acceptObservedPosition() {
+    _confirmedPosition = _observedPosition;
+    _reportProgress(_observedPosition);
+    _emit(_state.copyWith(position: _observedPosition, message: _state.message));
   }
 
   void _clearResume() {
@@ -327,6 +355,7 @@ class PlaybackSessionController {
 
   void _onPosition(Duration position) {
     if (_disposed) return;
+    _observedPosition = position;
     final pendingTarget = _pendingSeekTarget;
     if (pendingTarget != null) {
       if (position == Duration.zero && pendingTarget > Duration.zero) return;
@@ -364,6 +393,11 @@ class PlaybackSessionController {
 
     if (position == Duration.zero && _confirmedPosition > Duration.zero) return;
 
+    if (_confirmedPosition - position > timelineResetTolerance) {
+      _onTimelineReset(position);
+      return;
+    }
+
     _confirmedPosition = position;
     // 播放中的位置也要发出去,否则进度条只有在换阶段(缓冲开/停、播放暂停)时
     // 才动一下 —— 中间那段是**停着的**。
@@ -372,6 +406,25 @@ class PlaybackSessionController {
     final advanced = _reportedPositionSecond != position.inSeconds;
     _reportProgress(position);
     if (advanced) _emit(_state.copyWith(position: position));
+  }
+
+  /// 位置无缘无故掉回去了。
+  ///
+  /// 采信它的代价是:观众看到的 25 分钟被写成 0 秒,历史没了,下次续播从头开始,
+  /// 期间再卡一次,重连也从这个假位置起 —— 一段广告就能毁掉一条历史。所以先不认,
+  /// 把观众拽回原来的位置;拽不回来([resumeConfirmationTimeout] 到点)或者拽的
+  /// 次数够多了,才认下新时间轴,免得进度条停在流里已经不存在的一个时刻上。
+  void _onTimelineReset(Duration observed) {
+    final anchor = _confirmedPosition;
+    if (_timelineReanchors >= maxTimelineReanchors) {
+      _confirmedPosition = observed;
+      _reportProgress(observed);
+      _emit(_state.copyWith(position: observed, message: _state.message));
+      return;
+    }
+    _timelineReanchors++;
+    _armResume(anchor, _generation);
+    unawaited(_player.seek(anchor));
   }
 
   void _reportProgress(Duration position) {

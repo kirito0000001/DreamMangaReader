@@ -123,6 +123,29 @@ void main() {
     await adapter.dispose();
   });
 
+  test('an ad break does not drag the gateway fallback back to the start',
+      () async {
+    final backend = _FakeBackend();
+    final adapter = MediaKitPlayerAdapter(
+      backend: backend,
+      gateway: _FakeGateway(),
+      authScope: 'source:test',
+    );
+    await adapter.open(_hls);
+    backend.positionController.add(const Duration(minutes: 12));
+
+    // 拼进来的广告段重置了 PTS,位置掉回片头 —— 观众还在 12 分钟。
+    backend.positionController.add(Duration.zero);
+    backend.positionController.add(const Duration(milliseconds: 40));
+
+    backend.errorController.add(StateError('HTTP 502'));
+    await Future<void>.delayed(Duration.zero);
+
+    expect(backend.opened.last, _hls);
+    expect(backend.openStarts.last, const Duration(minutes: 12));
+    await adapter.dispose();
+  });
+
   test('a gateway playback error falls back to the original HLS once',
       () async {
     final backend = _FakeBackend();

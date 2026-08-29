@@ -834,6 +834,111 @@ void main() {
     });
   });
 
+  test('an ad break resetting the timeline cannot reach the history', () async {
+    final adapter = _FakePlayerAdapter();
+    final progress = <Duration>[];
+    final controller = PlaybackSessionController(
+      messages: _messages,
+      player: adapter,
+      tracks: _FakeTrackProvider(),
+      delay: (_) async {},
+      onProgress: (position, _) => progress.add(position),
+    );
+    await controller.start(const [_track480], _track480);
+    adapter.durationController.add(const Duration(minutes: 24));
+    adapter.playingController.add(true);
+    adapter.positionController.add(const Duration(minutes: 12));
+    progress.clear();
+
+    // 拼进来的广告段带一个重置的 PTS,位置一下掉回片头。观众还在 12 分钟。
+    adapter.positionController.add(Duration.zero);
+    adapter.positionController.add(const Duration(milliseconds: 40));
+    adapter.positionController.add(const Duration(seconds: 1));
+
+    expect(progress, isEmpty);
+    expect(controller.state.position, const Duration(minutes: 12));
+    // 把观众拽回去,而不是让他从头看起。
+    expect(adapter.seeks, [const Duration(minutes: 12)]);
+
+    adapter.positionController.add(const Duration(minutes: 12, seconds: 1));
+    expect(progress, [const Duration(minutes: 12, seconds: 1)]);
+    await controller.dispose();
+  });
+
+  test('a reset that cannot be undone is accepted rather than fought forever',
+      () {
+    fakeAsync((async) {
+      final adapter = _FakePlayerAdapter();
+      final controller = PlaybackSessionController(
+        messages: _messages,
+        player: adapter,
+        tracks: _FakeTrackProvider(),
+        delay: (_) async {},
+        resumeConfirmationTimeout: const Duration(seconds: 20),
+        maxTimelineReanchors: 2,
+      );
+      controller.start(const [_track480], _track480);
+      async.flushMicrotasks();
+      adapter.durationController.add(const Duration(minutes: 24));
+      adapter.positionController.add(const Duration(minutes: 12));
+
+      // 每一轮:看回 12 分钟 → 又被重置 → 拽不回来,等确认窗口过了认命。
+      for (var attempt = 0; attempt < 4; attempt++) {
+        adapter.positionController.add(const Duration(minutes: 12));
+        adapter.positionController.add(const Duration(seconds: 2));
+        async.elapse(const Duration(seconds: 20));
+      }
+
+      // 只拽两次就收手,之后直接认下新时间轴,不再跟这条流对着 seek。
+      expect(adapter.seeks, hasLength(2));
+      expect(controller.state.position, const Duration(seconds: 2));
+      controller.dispose();
+      async.flushMicrotasks();
+    });
+  });
+
+  test('position jitter inside the tolerance is not mistaken for a reset',
+      () async {
+    final adapter = _FakePlayerAdapter();
+    final controller = PlaybackSessionController(
+      messages: _messages,
+      player: adapter,
+      tracks: _FakeTrackProvider(),
+      delay: (_) async {},
+    );
+    await controller.start(const [_track480], _track480);
+    adapter.durationController.add(const Duration(minutes: 24));
+    adapter.positionController.add(const Duration(minutes: 12));
+
+    adapter.positionController.add(const Duration(minutes: 11, seconds: 58));
+
+    expect(adapter.seeks, isEmpty);
+    expect(controller.state.position, const Duration(minutes: 11, seconds: 58));
+    await controller.dispose();
+  });
+
+  test('seeking backwards on purpose is not treated as a reset', () async {
+    final adapter = _FakePlayerAdapter();
+    final controller = PlaybackSessionController(
+      messages: _messages,
+      player: adapter,
+      tracks: _FakeTrackProvider(),
+      delay: (_) async {},
+    );
+    await controller.start(const [_track480], _track480);
+    adapter.durationController.add(const Duration(minutes: 24));
+    adapter.positionController.add(const Duration(minutes: 12));
+
+    await controller.seekTo(const Duration(minutes: 1), resumeAfterSeek: false);
+    adapter.positionController.add(const Duration(minutes: 1));
+    adapter.positionController.add(const Duration(minutes: 1, seconds: 1));
+
+    // 一次 seek,不是三次 —— 拽回去的逻辑不能跟用户对着干。
+    expect(adapter.seeks, [const Duration(minutes: 1)]);
+    expect(controller.state.position, const Duration(minutes: 1, seconds: 1));
+    await controller.dispose();
+  });
+
   test('a user seek supersedes a resume that has not landed yet', () async {
     final adapter = _FakePlayerAdapter()..dropStartAt = true;
     final controller = PlaybackSessionController(

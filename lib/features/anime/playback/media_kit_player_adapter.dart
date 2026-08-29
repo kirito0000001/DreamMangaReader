@@ -162,6 +162,11 @@ class MediaKitPlayerAdapter implements PlayerAdapter {
     _subscriptions.add(_backend.position.listen(_onPosition));
   }
 
+  /// 位置往回跳一大截 = 时间轴被换了(HLS 拼进广告段会重置 PTS),不是播放。
+  /// [_position] 是网关回退重开时的落点,采信这种取样等于让回退从片头开始。
+  /// 会话层有同一道判断;两边各持一份位置,所以各挡各的。
+  static const _timelineResetTolerance = Duration(seconds: 5);
+
   final MediaKitBackend _backend;
   final HlsSessionGateway _gateway;
   final String authScope;
@@ -315,7 +320,7 @@ class MediaKitPlayerAdapter implements PlayerAdapter {
   void _onBuffer(Duration buffer) => _session?.reportBuffer(buffer);
 
   void _onPosition(Duration position) {
-    if (position == Duration.zero && _position > Duration.zero) return;
+    if (_position - position > _timelineResetTolerance) return;
     _position = position;
   }
 
