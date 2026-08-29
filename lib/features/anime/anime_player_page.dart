@@ -18,7 +18,11 @@ import '../../core/source/source.dart';
 import '../../core/source/source_registry.dart';
 import '../../app/anime_download_store.dart';
 import '../../app/anime_library_store.dart';
+import '../../app/download_coordinator_scope.dart';
+import '../../core/downloads/content_download_task.dart';
+import '../../core/downloads/download_task.dart';
 import '../../app/theme/app_colors.dart';
+import '../../ui/ui.dart';
 import 'anime_player_controls.dart';
 import 'bili_failure_text.dart';
 import 'playback/hls_cache_settings.dart';
@@ -242,7 +246,11 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
   final GlobalKey<VideoState> _videoKey = GlobalKey<VideoState>();
   int _panelTab = 0; // 0=选集 1=线路 2=字幕 3=设置
   double _rate = 1.0; // 倍速(跨集保持)
-  BoxFit _fit = BoxFit.contain; // 画面填充
+  PlayerAspect _aspect = PlayerAspect.fit; // 画面比例
+
+  /// 右下角那三颗按钮弹出的小卡片。B站那套:浮在按钮上方的一小张,而不是把整块
+  /// 抽屉拉出来 —— 改个倍速不该盖住半个画面。
+  _QuickPanel _quick = _QuickPanel.none;
 
   // —— 字幕:源给的外挂 + 流里自带的内嵌,在 UI 上合成一个列表 ——
   List<SubtitleOption> _embedded = const [];
@@ -263,7 +271,7 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
 
   // —— 手势与控件层(B站/YouTube 那套:全屏占满、点一下出控件、长按倍速快进)——
   // 明确**不做**双击快进/快退:issue #16 说了那个不好用。
-  static const Duration _controlsIdle = Duration(seconds: 4);
+  static const Duration _controlsIdle = Duration(seconds: 5);
 
   // 跳转步长与底部控件保持一致:后退小、前进大,免得在两个点之间来回弹。
   static const int _backSeconds = 5;
@@ -524,7 +532,10 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     if (!_playing) return;
     _controlsTimer = Timer(_controlsIdle, () {
       if (mounted && _playing && _dragTarget == null && !_boosting) {
-        setState(() => _controlsVisible = false);
+        setState(() {
+          _controlsVisible = false;
+          _quick = _QuickPanel.none;
+        });
       }
     });
   }
@@ -535,7 +546,10 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
   }
 
   void _toggleControls() {
-    setState(() => _controlsVisible = !_controlsVisible);
+    setState(() {
+      _controlsVisible = !_controlsVisible;
+      if (!_controlsVisible) _quick = _QuickPanel.none;
+    });
     if (_controlsVisible) _scheduleHideControls();
   }
 
@@ -829,6 +843,7 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     if (index < 0 || index >= widget.episodes.length) return;
     _scaffoldKey.currentState?.closeEndDrawer();
     if (index == _i) return;
+    setState(() => _quick = _QuickPanel.none);
     await _library?.flushPending();
     if (_disposed) return;
     setState(() => _i = index);
@@ -922,8 +937,7 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
             children: [
               AnimePlaybackSurface(
                 state: _playback,
-                video: _videoBuilder?.call(_fit) ??
-                    const ColoredBox(color: Colors.black),
+                video: _videoLayer(),
                 onRetry: _load,
               ),
               Positioned.fill(
@@ -931,7 +945,16 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
                   onPointerSignal: _onPointerSignal,
                   child: GestureDetector(
                     behavior: HitTestBehavior.opaque,
-                    onTap: _toggleControls,
+                    onTap: () {
+                      // 卡片开着的时候,点画面先收卡片 —— 和点外面关菜单是
+                      // 一个意思,不该顺手把整层 chrome 也一起收了。
+                      if (_quick != _QuickPanel.none) {
+                        setState(() => _quick = _QuickPanel.none);
+                        _showControls();
+                        return;
+                      }
+                      _toggleControls();
+                    },
                     onLongPressStart: (_) => _startBoost(),
                     onLongPressEnd: (_) => _stopBoost(),
                     onLongPressCancel: _stopBoost,
@@ -954,11 +977,26 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
               if (_adjusting != null) _adjustBadge(_adjusting!),
               _chrome(top: true, child: _topBar()),
               _chrome(top: false, child: _bottomBar()),
+              if (_quick != _QuickPanel.none && _controlsVisible)
+                _quickPanelCard(),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// 画面本身。
+  ///
+  /// 「16:9 / 4:3」不是 BoxFit 能表达的 —— 那是把画面**框**成某个比例再裁,
+  /// 所以先套一层 AspectRatio,再让画面在框里 cover。适应 / 拉伸 / 填充三档
+  /// 没有外框,直接由 BoxFit 决定。
+  Widget _videoLayer() {
+    final video = _videoBuilder?.call(_aspect.boxFit) ??
+        const ColoredBox(color: Colors.black);
+    final ratio = _aspect.ratio;
+    if (ratio == null) return video;
+    return Center(child: AspectRatio(aspectRatio: ratio, child: video));
   }
 
   /// 浮层 chrome:淡入淡出,隐藏时不吃点击(否则手势层收不到 tap)。
@@ -1028,6 +1066,7 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
                             fontSize: 12,
                             fontWeight: FontWeight.w600)),
                   ),
+                ..._topActions(),
                 IconButton(
                   tooltip: context.l10n.player_menuTooltip,
                   icon: const Icon(Icons.playlist_play_rounded),
@@ -1074,12 +1113,255 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
                   _session?.seekTo(target, resumeAfterSeek: resumeAfterSeek),
                 );
               },
+              onEpisodes: widget.episodes.length > 1
+                  ? () => _toggleQuick(_QuickPanel.episodes)
+                  : null,
+              onRate: () => _toggleQuick(_QuickPanel.rate),
+              rateLabel: _rate == 1.0 ? '' : '${_rate}x',
+              onQuality:
+                  _tracks.isEmpty ? null : () => _toggleQuick(_QuickPanel.quality),
+              qualityLabel: _current?.quality ?? '',
               onOpenPanel: () => _scaffoldKey.currentState?.openEndDrawer(),
               // 移动端的播放页本来就是沉浸式横屏、已经占满整屏,再给一个全屏键
               // 只会让人点了没反应 —— 干脆不显示。
               onFullscreen:
                   WindowFullscreen.supported ? _toggleFullscreen : null,
               fullscreen: WindowFullscreen.instance.isFullscreen,
+            ),
+          ),
+        ),
+      );
+
+  /// 标题栏右侧:收藏 / 下载这一集 / 复制链接。
+  ///
+  /// 这三样以前只有退回详情页才够得着,可它们要的恰恰是「正在看这一集」这个
+  /// 上下文 —— 看到一半想收藏、想留一份离线、想把链接发给人。
+  List<Widget> _topActions() {
+    final library = AnimeLibraryScope.maybeOf(context);
+    final favorite =
+        library?.isFavorite(widget.meta.id, widget.animeId) ?? false;
+    return [
+      if (library != null)
+        IconButton(
+          tooltip: favorite
+              ? context.l10n.detail_removeFavorite
+              : context.l10n.detail_addFavorite,
+          icon: Icon(favorite
+              ? Icons.favorite_rounded
+              : Icons.favorite_border_rounded),
+          color: favorite ? _accent : Colors.white,
+          onPressed: () => _toggleFavorite(library),
+        ),
+      IconButton(
+        tooltip: context.l10n.player_downloadEpisode,
+        icon: const Icon(Icons.download_rounded),
+        color: Colors.white,
+        onPressed: _downloadEpisode,
+      ),
+      IconButton(
+        tooltip: context.l10n.player_copyLink,
+        icon: const Icon(Icons.link_rounded),
+        color: Colors.white,
+        onPressed: _copyLink,
+      ),
+    ];
+  }
+
+  void _toggleFavorite(AnimeLibraryStore library) {
+    library.toggleFavorite(AnimeFavoriteEntry(
+      sourceId: widget.meta.id,
+      animeId: widget.animeId,
+      title: widget.animeTitle,
+      cover: widget.animeCover,
+      addedAt: DateTime.now().millisecondsSinceEpoch,
+    ));
+    _showControls();
+  }
+
+  Future<void> _downloadEpisode() async {
+    _showControls();
+    final episode = _ep;
+    final downloads = AnimeDownloadScope.maybeRead(context);
+    final coordinator = DownloadCoordinatorScope.maybeRead(context);
+    final l10n = context.l10n;
+    if (downloads == null || coordinator == null) return;
+    if (downloads.isDownloaded(widget.meta.id, widget.animeId, episode.id)) {
+      showAppNotify(context, l10n.player_alreadyDownloaded);
+      return;
+    }
+    final taskId = contentDownloadTaskId(
+      DownloadContentKind.anime,
+      widget.meta.id,
+      widget.animeId,
+      episode.id,
+    );
+    final existing = coordinator.task(taskId);
+    if (existing == null) {
+      await coordinator.enqueue(ContentDownloadTask.anime(
+        sourceId: widget.meta.id,
+        contentId: widget.animeId,
+        contentTitle: widget.animeTitle,
+        chapterId: episode.id,
+        chapterTitle: episode.name,
+        now: DateTime.now().millisecondsSinceEpoch,
+      ));
+    } else {
+      switch (existing.state) {
+        case DownloadTaskState.paused:
+          await coordinator.resume(taskId);
+        case DownloadTaskState.failed || DownloadTaskState.cancelled:
+          await coordinator.retry(taskId);
+        case DownloadTaskState.resolving ||
+              DownloadTaskState.queued ||
+              DownloadTaskState.running ||
+              DownloadTaskState.verifying ||
+              DownloadTaskState.completed:
+          break;
+      }
+    }
+    if (mounted) showAppNotify(context, l10n.player_downloadQueued);
+  }
+
+  /// 复制这一集的链接。
+  ///
+  /// 优先源站页面地址:播放地址常带签名,过一会儿就死了,发给人只会得到一个
+  /// 打不开的链接。源没给页面地址时才退回播放地址。
+  Future<void> _copyLink() async {
+    _showControls();
+    final l10n = context.l10n;
+    final link = _ep.url ?? _current?.url;
+    if (link == null || link.isEmpty) {
+      showAppNotify(context, l10n.player_noLink, kind: AppNotifyKind.warn);
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: link));
+    if (mounted) {
+      showAppNotify(context, l10n.player_linkCopied,
+          kind: AppNotifyKind.success);
+    }
+  }
+
+  void _toggleQuick(_QuickPanel panel) {
+    setState(() => _quick = _quick == panel ? _QuickPanel.none : panel);
+    _showControls();
+  }
+
+  /// 右下角弹出的小卡片。贴着底栏上沿、右对齐,盖住的画面最少。
+  Widget _quickPanelCard() => Positioned(
+        right: 12,
+        bottom: 88,
+        child: SafeArea(
+          top: false,
+          child: Container(
+            constraints: const BoxConstraints(maxHeight: 260, maxWidth: 300),
+            decoration: BoxDecoration(
+              color: _panelBg.withValues(alpha: 0.96),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            padding: const EdgeInsets.symmetric(vertical: 8),
+            child: switch (_quick) {
+              _QuickPanel.rate => _quickRates(),
+              _QuickPanel.quality => _quickQualities(),
+              _QuickPanel.episodes => _quickEpisodes(),
+              _QuickPanel.none => const SizedBox.shrink(),
+            },
+          ),
+        ),
+      );
+
+  Widget _quickRates() {
+    const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
+    return ListView(
+      shrinkWrap: true,
+      children: [
+        for (final rate in rates)
+          _quickRow(
+            label: rate == 1.0 ? '1.0x' : '${rate}x',
+            selected: _rate == rate,
+            onTap: () {
+              _setRate(rate);
+              _toggleQuick(_QuickPanel.rate);
+            },
+          ),
+      ],
+    );
+  }
+
+  Widget _quickQualities() => ListView(
+        shrinkWrap: true,
+        children: [
+          for (var i = 0; i < _tracks.length; i++)
+            _quickRow(
+              label: _tracks[i].quality.isEmpty
+                  ? context.l10n.player_routeN(i + 1)
+                  : _tracks[i].quality,
+              selected: _tracks[i].url == _current?.url,
+              onTap: _tracks.length == 1
+                  ? null
+                  : () {
+                      unawaited(_switchTrack(_tracks[i]));
+                      _toggleQuick(_QuickPanel.quality);
+                    },
+            ),
+        ],
+      );
+
+  Widget _quickEpisodes() => SizedBox(
+        width: 280,
+        child: GridView.builder(
+          shrinkWrap: true,
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+            maxCrossAxisExtent: 56,
+            mainAxisSpacing: 6,
+            crossAxisSpacing: 6,
+            childAspectRatio: 1.6,
+          ),
+          itemCount: widget.episodes.length,
+          itemBuilder: (_, i) {
+            final on = i == _i;
+            return GestureDetector(
+              onTap: () {
+                _toggleQuick(_QuickPanel.episodes);
+                unawaited(_goTo(i));
+              },
+              child: Container(
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: on ? _accent.withValues(alpha: 0.2) : _panelChip,
+                  borderRadius: BorderRadius.circular(6),
+                  border:
+                      Border.all(color: on ? _accent : Colors.transparent),
+                ),
+                child: Text(
+                  _epShort(i),
+                  style: TextStyle(
+                    color: on ? _accent : Colors.white70,
+                    fontSize: 12.5,
+                    fontWeight: on ? FontWeight.w700 : FontWeight.w500,
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+
+  Widget _quickRow({
+    required String label,
+    required bool selected,
+    required VoidCallback? onTap,
+  }) =>
+      InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 11),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: selected ? _accent : Colors.white,
+              fontSize: 13.5,
+              fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
             ),
           ),
         ),
@@ -1374,9 +1656,11 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
   Widget _panelSettings() {
     const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
     final fits = [
-      (context.l10n.player_fitContain, BoxFit.contain),
-      (context.l10n.player_fitCover, BoxFit.cover),
-      (context.l10n.player_fitStretch, BoxFit.fill),
+      (context.l10n.player_fitContain, PlayerAspect.fit),
+      (context.l10n.player_fitStretch, PlayerAspect.stretch),
+      (context.l10n.player_fitCover, PlayerAspect.fill),
+      ('16:9', PlayerAspect.wide),
+      ('4:3', PlayerAspect.classic),
     ];
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
@@ -1399,7 +1683,8 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
           runSpacing: 8,
           children: [
             for (final f in fits)
-              _chip(f.$1, _fit == f.$2, () => setState(() => _fit = f.$2)),
+              _chip(f.$1, _aspect == f.$2,
+                  () => setState(() => _aspect = f.$2)),
           ],
         ),
       ],
@@ -1426,6 +1711,28 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     );
   }
 }
+
+/// 画面比例。
+///
+/// 前三档是「画面怎么填进窗口」,由 BoxFit 表达;后两档是「先把画面框成这个
+/// 比例」,BoxFit 表达不了,得另外套一层 AspectRatio。
+enum PlayerAspect {
+  fit(BoxFit.contain, null),
+  stretch(BoxFit.fill, null),
+  fill(BoxFit.cover, null),
+  wide(BoxFit.cover, 16 / 9),
+  classic(BoxFit.cover, 4 / 3);
+
+  const PlayerAspect(this.boxFit, this.ratio);
+
+  final BoxFit boxFit;
+
+  /// null = 不锁比例,画面自己的比例说了算。
+  final double? ratio;
+}
+
+/// 右下角三颗按钮各自弹出的小卡片。
+enum _QuickPanel { none, episodes, rate, quality }
 
 /// 竖向拖动 / 键盘调节音量亮度时,中央胶囊要显示的一次读数。
 class _Adjustment {

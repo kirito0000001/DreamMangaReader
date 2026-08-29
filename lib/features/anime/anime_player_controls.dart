@@ -27,6 +27,11 @@ class AnimePlayerControls extends StatefulWidget {
     this.fullscreen = false,
     this.onPrevEpisode,
     this.onNextEpisode,
+    this.onEpisodes,
+    this.onRate,
+    this.onQuality,
+    this.rateLabel = '',
+    this.qualityLabel = '',
   });
 
   final Duration position;
@@ -52,6 +57,18 @@ class AnimePlayerControls extends StatefulWidget {
   /// null = 没有上下集,按钮置灰而不是消失 —— 位置固定,换集时按钮不会跳。
   final VoidCallback? onPrevEpisode;
   final VoidCallback? onNextEpisode;
+
+  // —— 右下角那三个文字按钮:选集 / 倍速 / 清晰度 ——
+  //
+  // 都在这一排,而不是藏进右上角的设置面板里:看番时最常改的就是这三样,
+  // 每一样都值一个直接够得着的位置。null = 这一档不可用,整个按钮不显示。
+  final VoidCallback? onEpisodes;
+  final VoidCallback? onRate;
+  final VoidCallback? onQuality;
+
+  /// 当前倍速 / 清晰度的读数。空 = 用「倍速」「清晰度」这样的通名。
+  final String rateLabel;
+  final String qualityLabel;
 
   @override
   State<AnimePlayerControls> createState() => _AnimePlayerControlsState();
@@ -132,92 +149,133 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
       mainAxisSize: MainAxisSize.min,
       children: [
         _seekBar(enabled),
-        SizedBox(
-          height: 44,
-          child: Row(
-            children: [
-              const SizedBox(width: 4),
-              _button(
-                tooltip: l10n.player_prevEpisode,
-                icon: Icons.skip_previous_rounded,
-                onPressed: widget.onPrevEpisode,
-              ),
-              _button(
-                tooltip: widget.playing ? l10n.player_pause : l10n.player_play,
-                icon: widget.playing
-                    ? Icons.pause_rounded
-                    : Icons.play_arrow_rounded,
-                onPressed: widget.onPlayPause,
-                size: 26,
-              ),
-              _button(
-                tooltip: l10n.player_nextEpisode,
-                icon: Icons.skip_next_rounded,
-                onPressed: widget.onNextEpisode,
-              ),
-              _seekButton(
-                tooltip: l10n.player_back5,
-                seconds: _backSeconds,
-                forward: false,
-                onPressed: enabled ? () => _shortSeek(-_backSeconds) : null,
-              ),
-              _seekButton(
-                tooltip: l10n.player_forward15,
-                seconds: _forwardSeconds,
-                forward: true,
-                onPressed: enabled ? () => _shortSeek(_forwardSeconds) : null,
-              ),
-              _seekButton(
-                tooltip: l10n.player_skipOpening,
-                seconds: _openingSeconds,
-                forward: true,
-                onPressed: enabled ? () => _shortSeek(_openingSeconds) : null,
-              ),
-              const SizedBox(width: 6),
-              // 当前 / 总时长挨在一起。以前一个贴最左一个贴最右,宽屏上两个数字
-              // 隔着大半个屏幕,想知道「还剩多久」得横扫一遍。
-              Text(
-                '${_format(_visiblePosition)} / ${_format(widget.duration)}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w600,
-                  fontFeatures: [FontFeature.tabularFigures()],
+        // 一排放不下时先撤跳片头那颗:它在 Shift+→ 上还有一份,而选集 / 倍速 /
+        // 清晰度没有别的入口。挤成一团点不中,比少一颗按钮更糟。
+        LayoutBuilder(builder: (context, constraints) {
+          final compact = constraints.maxWidth < 620;
+          return SizedBox(
+            height: 48,
+            child: Row(
+              children: [
+                const SizedBox(width: 4),
+                _button(
+                  tooltip: l10n.player_prevEpisode,
+                  icon: Icons.skip_previous_rounded,
+                  onPressed: widget.onPrevEpisode,
                 ),
-              ),
-              if (widget.buffering) ...[
-                const SizedBox(width: 10),
-                const SizedBox.square(
-                  dimension: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.white70,
+                _button(
+                  tooltip:
+                      widget.playing ? l10n.player_pause : l10n.player_play,
+                  icon: widget.playing
+                      ? Icons.pause_rounded
+                      : Icons.play_arrow_rounded,
+                  onPressed: widget.onPlayPause,
+                  size: 30,
+                ),
+                _button(
+                  tooltip: l10n.player_nextEpisode,
+                  icon: Icons.skip_next_rounded,
+                  onPressed: widget.onNextEpisode,
+                ),
+                _seekButton(
+                  tooltip: l10n.player_back5,
+                  seconds: _backSeconds,
+                  forward: false,
+                  onPressed: enabled ? () => _shortSeek(-_backSeconds) : null,
+                ),
+                _seekButton(
+                  tooltip: l10n.player_forward15,
+                  seconds: _forwardSeconds,
+                  forward: true,
+                  onPressed:
+                      enabled ? () => _shortSeek(_forwardSeconds) : null,
+                ),
+                if (!compact)
+                  _seekButton(
+                    tooltip: l10n.player_skipOpening,
+                    seconds: _openingSeconds,
+                    forward: true,
+                    onPressed:
+                        enabled ? () => _shortSeek(_openingSeconds) : null,
+                  ),
+                const SizedBox(width: 6),
+                // 当前 / 总时长挨在一起。以前一个贴最左一个贴最右,宽屏上两个
+                // 数字隔着大半个屏幕,想知道「还剩多久」得横扫一遍。
+                Text(
+                  '${_format(_visiblePosition)} / ${_format(widget.duration)}',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: [FontFeature.tabularFigures()],
                   ),
                 ),
-              ],
-              const Spacer(),
-              _button(
-                tooltip: l10n.player_options,
-                icon: Icons.playlist_play_rounded,
-                onPressed: widget.onOpenPanel,
-              ),
-              if (widget.onFullscreen != null)
+                if (widget.buffering) ...[
+                  const SizedBox(width: 10),
+                  const SizedBox.square(
+                    dimension: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ],
+                const Spacer(),
+                if (widget.onEpisodes != null)
+                  _textButton(l10n.player_tabEpisodes, widget.onEpisodes!),
+                if (widget.onRate != null)
+                  _textButton(
+                    widget.rateLabel.isEmpty
+                        ? l10n.player_speedShort
+                        : widget.rateLabel,
+                    widget.onRate!,
+                  ),
+                if (widget.onQuality != null)
+                  _textButton(
+                    widget.qualityLabel.isEmpty
+                        ? l10n.player_tabQuality
+                        : widget.qualityLabel,
+                    widget.onQuality!,
+                  ),
                 _button(
-                  tooltip: widget.fullscreen
-                      ? l10n.player_exitFullscreen
-                      : l10n.player_fullscreen,
-                  icon: widget.fullscreen
-                      ? Icons.fullscreen_exit_rounded
-                      : Icons.fullscreen_rounded,
-                  onPressed: widget.onFullscreen,
+                  tooltip: l10n.player_options,
+                  icon: Icons.playlist_play_rounded,
+                  onPressed: widget.onOpenPanel,
                 ),
-              const SizedBox(width: 4),
-            ],
-          ),
-        ),
+                if (widget.onFullscreen != null)
+                  _button(
+                    tooltip: widget.fullscreen
+                        ? l10n.player_exitFullscreen
+                        : l10n.player_fullscreen,
+                    icon: widget.fullscreen
+                        ? Icons.fullscreen_exit_rounded
+                        : Icons.fullscreen_rounded,
+                    onPressed: widget.onFullscreen,
+                  ),
+                const SizedBox(width: 4),
+              ],
+            ),
+          );
+        }),
       ],
     );
   }
+
+  /// 右下角那三个文字按钮。文字比图标好使:「1.5x」「1080P」把当前状态直接说
+  /// 出来了,图标只能表示「这儿能改倍速」。
+  Widget _textButton(String label, VoidCallback onPressed) => TextButton(
+        onPressed: onPressed,
+        style: TextButton.styleFrom(
+          foregroundColor: Colors.white,
+          minimumSize: const Size(0, 44),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        child: Text(
+          label,
+          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+        ),
+      );
 
   /// 进度条。细、贴边、拖的时候变粗 —— Material 默认那套(胖圆点 + 粗轨)
   /// 在视频画面上像个表单控件,不像进度条。
@@ -270,21 +328,21 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
         color: Colors.white,
         disabledColor: Colors.white24,
         padding: EdgeInsets.zero,
-        visualDensity: VisualDensity.compact,
-        constraints: const BoxConstraints.tightFor(width: 38, height: 38),
+        visualDensity: VisualDensity.standard,
+        constraints: const BoxConstraints.tightFor(width: 44, height: 44),
         icon: SizedBox.square(
-          dimension: 22,
+          dimension: 26,
           child: Stack(
             alignment: Alignment.center,
             children: [
               Transform.flip(
                 flipX: !forward,
-                child: const Icon(Icons.refresh_rounded, size: 22),
+                child: const Icon(Icons.refresh_rounded, size: 26),
               ),
               Text(
                 '$seconds',
                 style: const TextStyle(
-                  fontSize: 8.5,
+                  fontSize: 9.5,
                   height: 1,
                   fontWeight: FontWeight.w800,
                   fontFeatures: [FontFeature.tabularFigures()],
@@ -299,7 +357,7 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
     required String tooltip,
     required IconData icon,
     required VoidCallback? onPressed,
-    double size = 22,
+    double size = 26,
   }) =>
       IconButton(
         tooltip: tooltip,
@@ -309,7 +367,7 @@ class _AnimePlayerControlsState extends State<AnimePlayerControls> {
         disabledColor: Colors.white24,
         iconSize: size,
         padding: EdgeInsets.zero,
-        visualDensity: VisualDensity.compact,
-        constraints: const BoxConstraints.tightFor(width: 38, height: 38),
+        visualDensity: VisualDensity.standard,
+        constraints: const BoxConstraints.tightFor(width: 44, height: 44),
       );
 }

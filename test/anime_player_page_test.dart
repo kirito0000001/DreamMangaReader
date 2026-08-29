@@ -360,8 +360,84 @@ void main() {
     expect(find.descendant(of: row, matching: find.text('1080P')),
         findsOneWidget);
     expect(tester.widget<ListTile>(row).onTap, isNull);
-    // 标题栏角落那一处也报同一个清晰度 —— 一眼看得到,不用开面板。
-    expect(find.text('1080P'), findsNWidgets(2));
+    // 标题栏角落和右下角那颗按钮也报同一个清晰度 —— 不用开面板就看得到。
+    expect(find.text('1080P'), findsNWidgets(3));
+  });
+
+  // 改倍速不该盖住半个画面:右下角那颗按钮弹的是一张贴着底栏的小卡片,
+  // 不是把整块抽屉拉出来。
+  testWidgets('the speed button opens a card, not the whole drawer',
+      (tester) async {
+    final adapter = _PageFakeAdapter();
+    await tester.pumpWidget(_playerHost(adapter));
+    await tester.pump();
+    adapter.durationController.add(const Duration(minutes: 24));
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    await tester.tap(find.text('倍速'));
+    await tester.pumpAndSettle();
+    expect(find.text('1.5x'), findsOneWidget);
+    expect(find.text('字幕'), findsNothing); // 抽屉没被拉出来
+
+    await tester.tap(find.text('1.5x'));
+    await tester.pumpAndSettle();
+    expect(adapter.rates.last, 1.5);
+    // 选完就收,读数换成刚选的那一档。
+    expect(find.text('0.5x'), findsNothing);
+    expect(find.text('1.5x'), findsOneWidget);
+  });
+
+  testWidgets('tapping the picture puts the card away before the chrome',
+      (tester) async {
+    final adapter = _PageFakeAdapter();
+    await tester.pumpWidget(_playerHost(adapter));
+    await tester.pump();
+    adapter.durationController.add(const Duration(minutes: 24));
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    await tester.tap(find.text('倍速'));
+    await tester.pumpAndSettle();
+    expect(find.text('0.5x'), findsOneWidget);
+
+    await tester.tapAt(const Offset(200, 200));
+    await tester.pumpAndSettle();
+
+    expect(find.text('0.5x'), findsNothing);
+    // chrome 还在 —— 点外面关卡片,不该顺手把控件也收了。
+    expect(find.text('倍速'), findsOneWidget);
+  });
+
+  // 「16:9 / 4:3」不是 BoxFit 能表达的:那是先把画面框成某个比例再裁。
+  testWidgets('a locked ratio frames the picture before filling it',
+      (tester) async {
+    final adapter = _PageFakeAdapter();
+    final fits = <BoxFit>[];
+    await tester.pumpWidget(_playerHost(
+      adapter,
+      videoBuilder: (fit) {
+        fits.add(fit);
+        return const ColoredBox(color: Colors.black);
+      },
+    ));
+    await tester.pump();
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    expect(find.byType(AspectRatio), findsNothing);
+    expect(fits.last, BoxFit.contain);
+
+    await tester.tap(find.byTooltip('选集 / 清晰度 / 设置'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设置'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('16:9'));
+    await tester.pumpAndSettle();
+
+    final framed = tester.widget<AspectRatio>(find.byType(AspectRatio));
+    expect(framed.aspectRatio, closeTo(16 / 9, 0.001));
+    expect(fits.last, BoxFit.cover);
   });
 
   testWidgets('complete offline episode bypasses online track resolution',
@@ -685,6 +761,7 @@ Widget _playerHost(
   List<Chapter> episodes = const [Chapter(id: 'ep-1', name: '第一集')],
   List<VideoTrack> tracks = const [_track],
   void Function(String episodeId)? onLoadTracks,
+  Widget Function(BoxFit fit)? videoBuilder,
 }) =>
     MaterialApp(
       locale: const Locale('zh'),
@@ -711,7 +788,8 @@ Widget _playerHost(
             onLoadTracks?.call(episodeId);
             return tracks;
           },
-          videoBuilder: (_) => const ColoredBox(color: Colors.black),
+          videoBuilder: videoBuilder ??
+              (_) => const ColoredBox(color: Colors.black),
         ),
       ),
     );

@@ -161,6 +161,46 @@ void main() {
     expect(seeks, [const Duration(seconds: 94)]);
   });
 
+  // 看番时最常改的就是这三样,每一样都该在底栏直接够得着,而不是埋进右上角
+  // 那块设置面板里。
+  testWidgets('speed and quality read out their current value', (tester) async {
+    await tester.pumpWidget(_actionsHost(
+      rateLabel: '1.5x',
+      qualityLabel: '1080P',
+    ));
+
+    expect(find.text('选集'), findsOneWidget);
+    expect(find.text('1.5x'), findsOneWidget);
+    expect(find.text('1080P'), findsOneWidget);
+  });
+
+  testWidgets('the generic names stand in until there is a value to report',
+      (tester) async {
+    await tester.pumpWidget(_actionsHost(rateLabel: '', qualityLabel: ''));
+
+    expect(find.text('倍速'), findsOneWidget);
+    expect(find.text('清晰度'), findsOneWidget);
+  });
+
+  testWidgets('an action with nothing behind it is not drawn', (tester) async {
+    await tester.pumpWidget(_actionsHost(episodes: false));
+
+    expect(find.text('选集'), findsNothing);
+    expect(find.text('1.0x'), findsOneWidget);
+  });
+
+  // 44 是移动端触摸目标的下限,原来的 38 太小 —— 横屏拿着手机点不中。
+  testWidgets('every control is at least a finger wide', (tester) async {
+    await tester.pumpWidget(_actionsHost());
+
+    for (final element in find.byType(IconButton).evaluate()) {
+      final size = tester.getSize(find.byWidget(element.widget));
+      expect(size.width, greaterThanOrEqualTo(44.0),
+          reason: '${(element.widget as IconButton).tooltip} 太窄了');
+      expect(size.height, greaterThanOrEqualTo(44.0));
+    }
+  });
+
   // 移动端播放页本来就是沉浸式全屏,给个按钮点了没反应比没有更糟。
   testWidgets('没有窗口全屏的平台不显示全屏键', (tester) async {
     await tester.pumpWidget(_host(onFullscreen: null));
@@ -245,6 +285,35 @@ Widget _seekHost({
           onPlayPause: () {},
           onScrubStart: (_) {},
           onSeek: (target, _) => onSeek(target),
+          onOpenPanel: () {},
+          onFullscreen: () {},
+        ),
+      ),
+    );
+
+Widget _actionsHost({
+  String rateLabel = '1.0x',
+  String qualityLabel = '1080P',
+  bool episodes = true,
+}) =>
+    MaterialApp(
+      locale: const Locale('zh'),
+      supportedLocales: AppLocalizations.supportedLocales,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      home: Scaffold(
+        body: AnimePlayerControls(
+          position: const Duration(minutes: 1),
+          duration: const Duration(minutes: 24),
+          playing: true,
+          buffering: false,
+          rateLabel: rateLabel,
+          qualityLabel: qualityLabel,
+          onEpisodes: episodes ? () {} : null,
+          onRate: () {},
+          onQuality: () {},
+          onPlayPause: () {},
+          onScrubStart: (_) {},
+          onSeek: (_, __) {},
           onOpenPanel: () {},
           onFullscreen: () {},
         ),
