@@ -26,7 +26,7 @@ void main() {
       ),
     ]);
 
-    expect(tracks.map((track) => track.quality), ['480p', '360p']);
+    expect(tracks.map((track) => track.quality), ['480P', '360P']);
     expect(
       tracks.map((track) => track.url),
       [
@@ -37,6 +37,31 @@ void main() {
     expect(tracks.every((track) => track.headers == _headers), isTrue);
     expect(resolver.bandwidthOf(tracks.first), 1400000);
     expect(resolver.resolutionOf(tracks.first), (width: 854, height: 480));
+  });
+
+  test('letterboxed and 4:3 variants land in the tier viewers recognise',
+      () async {
+    final resolver = TrackResolver(
+      fetchPlaylist: (_, __) async =>
+          File('test/fixtures/hls/master_widescreen.m3u8').readAsStringSync(),
+      refreshTracks: () async => const [],
+    );
+
+    final tracks = await resolver.resolve(const [
+      VideoTrack(
+        url: 'https://media.example.test/root/master.m3u8',
+        hls: true,
+      ),
+    ]);
+
+    // 1920×608 是 2.35:1 的宽银幕番剧,行数确实只有 608,但没人管它叫 608p;
+    // 1440×1080 是 4:3,按宽归档会掉成 720P。两条都该落在 1080P。
+    // 三条撞在同一档,所以每条都补上真实分辨率 —— 否则面板上三行长得一样。
+    expect(tracks.map((track) => track.quality), [
+      '1080P · 1920×608',
+      '1080P · 1920×1080',
+      '1080P · 1440×1080',
+    ]);
   });
 
   test('keeps explicit source tracks without fetching or guessing bitrate',

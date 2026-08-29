@@ -298,15 +298,70 @@ void main() {
     adapter.playingController.add(true);
     await tester.pump();
 
-    await tester.tap(find.byTooltip('选集 / 线路 / 设置'));
+    await tester.tap(find.byTooltip('选集 / 清晰度 / 设置'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('线路'));
+    await tester.tap(find.text('清晰度'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('360p'));
     await tester.pump(const Duration(milliseconds: 350));
 
     expect(adapter.opened.last, _track360);
     expect(loadCalls, 1);
+  });
+
+  // 多数源的主清单只有一条变体。摆成一份点了没反应的选单,比直接说「只有这一种」
+  // 更让人困惑 —— 那正是 608p 那条 issue 里看到的样子。
+  testWidgets('a stream with one variant states its quality instead of'
+      ' offering a choice', (tester) async {
+    final adapter = _PageFakeAdapter();
+    final dependencies = AnimePlayerDependencies(
+      player: adapter,
+      tracks: _PageFakeTracks(),
+      loadTracks: (_) async => const [
+        VideoTrack(url: 'https://media.example.test/only.m3u8', quality: '1080P', hls: true),
+      ],
+      videoBuilder: (_) => const ColoredBox(color: Colors.black),
+    );
+    await tester.pumpWidget(MaterialApp(
+      locale: const Locale('zh'),
+      supportedLocales: AppLocalizations.supportedLocales,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      theme: ThemeData(extensions: const [
+        AppTokens(palette: AppPalette.dark),
+      ]),
+      home: AnimePlayerPage(
+        meta: const SourceMeta(
+          id: 'test-anime',
+          name: 'Test Anime',
+          script: '',
+          kind: 'anime',
+        ),
+        animeId: 'anime-1',
+        animeTitle: '测试番剧',
+        episodes: const [Chapter(id: 'ep-1', name: '第一集')],
+        index: 0,
+        dependencies: dependencies,
+      ),
+    ));
+    await tester.pump();
+    adapter.playingController.add(true);
+    await tester.pump();
+
+    await tester.tap(find.byTooltip('选集 / 清晰度 / 设置'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('清晰度'));
+    await tester.pumpAndSettle();
+
+    final row = find.ancestor(
+      of: find.text('这条流只提供这一种清晰度'),
+      matching: find.byType(ListTile),
+    );
+    expect(row, findsOneWidget);
+    expect(find.descendant(of: row, matching: find.text('1080P')),
+        findsOneWidget);
+    expect(tester.widget<ListTile>(row).onTap, isNull);
+    // 标题栏角落那一处也报同一个清晰度 —— 一眼看得到,不用开面板。
+    expect(find.text('1080P'), findsNWidgets(2));
   });
 
   testWidgets('complete offline episode bypasses online track resolution',
@@ -596,7 +651,7 @@ void main() {
     adapter.playingController.add(true);
     await tester.pump();
 
-    await tester.tap(find.byTooltip('选集 / 线路 / 设置'));
+    await tester.tap(find.byTooltip('选集 / 清晰度 / 设置'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('字幕'));
     await tester.pumpAndSettle();
@@ -616,7 +671,7 @@ void main() {
     adapter.playingController.add(true);
     await tester.pump();
 
-    await tester.tap(find.byTooltip('选集 / 线路 / 设置'));
+    await tester.tap(find.byTooltip('选集 / 清晰度 / 设置'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('字幕'));
     await tester.pumpAndSettle();

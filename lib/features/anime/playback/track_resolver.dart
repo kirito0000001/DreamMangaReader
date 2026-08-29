@@ -4,6 +4,7 @@ import 'package:hls/hls.dart';
 
 import '../../../core/source/models.dart';
 import 'playback_session_controller.dart';
+import 'quality_label.dart';
 
 typedef PlaylistFetcher = Future<String> Function(
   Uri uri,
@@ -36,16 +37,18 @@ class TrackResolver implements PlaybackTrackProvider {
     if (parsed is! HlsMasterPlaylist) return List.unmodifiable(sourceTracks);
 
     final master = HlsComposer.normalize(parsed) as HlsMasterPlaylist;
+    final tiers = [
+      for (final variant in master.variants)
+        qualityTierLabel(width: variant.width, height: variant.height),
+    ];
     final resolved = <VideoTrack>[];
-    for (final variant in master.variants) {
+    for (var index = 0; index < master.variants.length; index++) {
+      final variant = master.variants[index];
       final uri = _safeHttpUri(variant.uri.toString());
       final bandwidth = variant.averageBandwidth ?? variant.bandwidth;
-      final label = variant.height == null
-          ? '${(bandwidth / 1000).round()} kbps'
-          : '${variant.height}p';
       final track = VideoTrack(
         url: uri.toString(),
-        quality: label,
+        quality: _label(variant, tiers, index, bandwidth),
         headers: source.headers,
         hls: true,
         audioUrl: source.audioUrl,
@@ -59,6 +62,29 @@ class TrackResolver implements PlaybackTrackProvider {
     }
     if (resolved.isEmpty) throw const FormatException('HLS 主清单没有可用变体');
     return List.unmodifiable(resolved);
+  }
+
+  /// 变体的显示名:优先清晰度档,没有分辨率就退回码率。
+  ///
+  /// 两条变体归到同一档时(1920×1080 和 1920×800 都是 1080P)给两边都补上真实
+  /// 分辨率 —— 否则面板上两行一模一样,而且刷新地址后 [matchRefreshed] 按名字
+  /// 认轨道会认错那一条。
+  static String _label(
+    HlsVariant variant,
+    List<String?> tiers,
+    int index,
+    int bandwidth,
+  ) {
+    final tier = tiers[index];
+    if (tier == null) return '${(bandwidth / 1000).round()} kbps';
+    var collides = false;
+    for (var other = 0; other < tiers.length; other++) {
+      if (other != index && tiers[other] == tier) collides = true;
+    }
+    if (!collides) return tier;
+    final exact =
+        exactResolution(width: variant.width, height: variant.height);
+    return exact == null ? tier : '$tier · $exact';
   }
 
   int? bandwidthOf(VideoTrack track) => _bandwidths[track.url];

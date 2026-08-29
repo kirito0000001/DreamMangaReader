@@ -1337,13 +1337,14 @@
   },
   "player_noRoute": "没有解析到可播放的线路",
   "player_back": "返回",
-  "player_menuTooltip": "选集 / 线路 / 设置",
+  "player_menuTooltip": "选集 / 清晰度 / 设置",
   "player_prevEpisode": "上一集",
   "player_nextEpisode": "下一集",
   "player_tabEpisodes": "选集",
-  "player_tabRoutes": "线路",
+  "player_tabQuality": "清晰度",
   "player_tabSettings": "设置",
-  "player_noRoutes": "暂无可选线路",
+  "player_noQuality": "暂无清晰度信息",
+  "player_qualityOnlyOne": "这条流只提供这一种清晰度",
   "player_routeN": "线路 {n}",
   "@player_routeN": {
     "placeholders": {

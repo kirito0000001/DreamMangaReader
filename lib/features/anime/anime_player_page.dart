@@ -1151,13 +1151,13 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 顶部分段:选集 / 线路 / 字幕 / 设置
+            // 顶部分段:选集 / 清晰度 / 字幕 / 设置
             Padding(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
               child: Row(
                 children: [
                   _tabBtn(context.l10n.player_tabEpisodes, 0),
-                  _tabBtn(context.l10n.player_tabRoutes, 1),
+                  _tabBtn(context.l10n.player_tabQuality, 1),
                   _tabBtn(context.l10n.player_tabSubtitles, 2),
                   _tabBtn(context.l10n.player_tabSettings, 3),
                 ],
@@ -1248,14 +1248,20 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     );
   }
 
-  // —— 线路 / 清晰度 ——
+  // —— 清晰度 ——
+  //
+  // 这一栏列的是 HLS 主清单里的变体。以前叫「线路」,而多数源的主清单只有一条
+  // 变体,于是它永远只有一行、还写着「608p」这种没人认得的数字(那是 2.35:1
+  // 宽银幕番剧的真实行数)。名字改成它实际是的东西,只有一档时也不再摆成一份
+  // 点了没反应的选单。
   Widget _panelTracks() {
     if (_tracks.isEmpty) {
       return Center(
-          child: Text(context.l10n.player_noRoutes,
+          child: Text(context.l10n.player_noQuality,
               style: const TextStyle(color: Colors.white38, fontSize: 13)));
     }
     final accent = _accent;
+    final fixed = _tracks.length == 1;
     return ListView.separated(
       padding: const EdgeInsets.symmetric(vertical: 8),
       itemCount: _tracks.length,
@@ -1267,10 +1273,11 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
         return _panelRow(
           accent: accent,
           selected: on,
-          icon: on ? Icons.check_circle_rounded : Icons.hd_outlined,
+          icon: on && !fixed ? Icons.check_circle_rounded : Icons.hd_outlined,
           label:
               t.quality.isEmpty ? context.l10n.player_routeN(i + 1) : t.quality,
-          onTap: () => _switchTrack(t),
+          subtitle: fixed ? context.l10n.player_qualityOnlyOne : null,
+          onTap: fixed ? null : () => _switchTrack(t),
         );
       },
     );
@@ -1329,7 +1336,8 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     required bool selected,
     required IconData icon,
     required String label,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
+    String? subtitle,
   }) =>
       ListTile(
         dense: true,
@@ -1343,6 +1351,13 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
                 color: selected ? accent : Colors.white,
                 fontSize: 14,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w500)),
+        subtitle: subtitle == null
+            ? null
+            : Text(subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(
+                    color: Colors.white38, fontSize: 11.5)),
       );
 
   Future<void> _setSubtitle(SubtitleOption option) async {
