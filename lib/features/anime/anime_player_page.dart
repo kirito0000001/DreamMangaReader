@@ -124,18 +124,8 @@ class AnimePlaybackSurface extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 10),
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(status,
-                              style: const TextStyle(color: Colors.white70)),
-                          if (state.phase == PlaybackPhase.buffering)
-                            Text(_bufferingDetail(state),
-                                style: const TextStyle(
-                                    color: Colors.white54, fontSize: 12)),
-                        ],
-                      ),
+                      Text(status,
+                          style: const TextStyle(color: Colors.white70)),
                     ],
                   ),
                 ),
@@ -146,26 +136,6 @@ class AnimePlaybackSurface extends StatelessWidget {
     );
   }
 
-  String _formatBufferDuration(Duration value) {
-    final seconds = value.inSeconds.clamp(0, 359999);
-    final hours = seconds ~/ 3600;
-    final minutes = (seconds % 3600) ~/ 60;
-    final rest = seconds % 60;
-    final mm = minutes.toString().padLeft(2, '0');
-    final ss = rest.toString().padLeft(2, '0');
-    return hours > 0 ? '$hours:$mm:$ss' : '$mm:$ss';
-  }
-
-  String _bufferingDetail(PlaybackState state) {
-    final buffered = _formatBufferDuration(state.buffered);
-    final duration = _formatBufferDuration(state.duration);
-    final percent = state.duration <= Duration.zero
-        ? 0
-        : (state.buffered.inMilliseconds / state.duration.inMilliseconds * 100)
-            .clamp(0, 100)
-            .round();
-    return '缓冲 $buffered / $duration  $percent%';
-  }
 }
 
 class AnimePlayerDependencies {
