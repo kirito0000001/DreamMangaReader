@@ -486,7 +486,10 @@ class HlsCacheGateway implements HlsSessionGateway {
       return;
     }
     final cacheRequest = _cacheRequestFor(session, resource);
-    // 播放器正在要的这一片优先:整个取流期间暂停预读队列。
+    // 当前片开始流式传输时就启动下一片预取,让后台下载与前台播放重叠。
+    // 预取队列仍是单请求串行,避免多个分片争抢当前片的带宽。
+    if (range == null) _schedulePrefetch(session, resource);
+    // 播放器正在要的这一片优先;若它与预读重叠,前台请求只等待同片的已有预读。
     session.foregroundRequests++;
     try {
       // 同一片的预读已经在下了 —— 等它落盘再走缓存,别再开一路把同样的字节下第二遍。
@@ -747,8 +750,6 @@ class HlsCacheGateway implements HlsSessionGateway {
             !_sessions.containsKey(session.id)) {
           return;
         }
-        // 前台正在取流:让路。下一片播出去时 _schedulePrefetch 会重新拉起本循环。
-        if (session.foregroundRequests > 0) return;
         final id = session.prefetchQueue.removeAt(0);
         final resource = session.resources[id];
         if (resource == null ||
@@ -760,6 +761,9 @@ class HlsCacheGateway implements HlsSessionGateway {
         session.prefetchInFlight[id] = future;
         try {
           await future;
+          // 前台请求可能在本片预取期间开始;本片完成后暂停继续排队,
+          // 让下一次播放器请求重新决定预取窗口。
+          if (session.foregroundRequests > 0) return;
         } catch (_) {
           return; // 上游挂了:停掉本轮预读,前台取流会自己重试并把错误报出去
         } finally {
