@@ -92,7 +92,7 @@ class AnimePlaybackSurface extends StatelessWidget {
     final status = switch (state.phase) {
       PlaybackPhase.resolving => context.l10n.player_resolvingUrl,
       PlaybackPhase.opening => context.l10n.player_connecting,
-      PlaybackPhase.buffering => context.l10n.player_buffering,
+      PlaybackPhase.buffering => _bufferingStatus(context, state),
       PlaybackPhase.recovering => state.message ?? context.l10n.player_resuming,
       _ => null,
     };
@@ -134,6 +134,27 @@ class AnimePlaybackSurface extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  String _formatBufferDuration(Duration value) {
+    final seconds = value.inSeconds.clamp(0, 359999);
+    final hours = seconds ~/ 3600;
+    final minutes = (seconds % 3600) ~/ 60;
+    final rest = seconds % 60;
+    final mm = minutes.toString().padLeft(2, '0');
+    final ss = rest.toString().padLeft(2, '0');
+    return hours > 0 ? '$hours:$mm:$ss' : '$mm:$ss';
+  }
+
+  String _bufferingStatus(BuildContext context, PlaybackState state) {
+    final buffered = _formatBufferDuration(state.buffered);
+    final duration = _formatBufferDuration(state.duration);
+    final percent = state.duration <= Duration.zero
+        ? 0
+        : (state.buffered.inMilliseconds / state.duration.inMilliseconds * 100)
+            .clamp(0, 100)
+            .round();
+    return '${context.l10n.player_buffering}  $buffered / $duration  $percent%';
   }
 }
 
