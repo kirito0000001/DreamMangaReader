@@ -92,7 +92,7 @@ class AnimePlaybackSurface extends StatelessWidget {
     final status = switch (state.phase) {
       PlaybackPhase.resolving => context.l10n.player_resolvingUrl,
       PlaybackPhase.opening => context.l10n.player_connecting,
-      PlaybackPhase.buffering => _bufferingStatus(context, state),
+      PlaybackPhase.buffering => context.l10n.player_buffering,
       PlaybackPhase.recovering => state.message ?? context.l10n.player_resuming,
       _ => null,
     };
@@ -124,8 +124,18 @@ class AnimePlaybackSurface extends StatelessWidget {
                         ),
                       ),
                       const SizedBox(width: 10),
-                      Text(status,
-                          style: const TextStyle(color: Colors.white70)),
+                      Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(status,
+                              style: const TextStyle(color: Colors.white70)),
+                          if (state.phase == PlaybackPhase.buffering)
+                            Text(_bufferingDetail(state),
+                                style: const TextStyle(
+                                    color: Colors.white54, fontSize: 12)),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -146,7 +156,7 @@ class AnimePlaybackSurface extends StatelessWidget {
     return hours > 0 ? '$hours:$mm:$ss' : '$mm:$ss';
   }
 
-  String _bufferingStatus(BuildContext context, PlaybackState state) {
+  String _bufferingDetail(PlaybackState state) {
     final buffered = _formatBufferDuration(state.buffered);
     final duration = _formatBufferDuration(state.duration);
     final percent = state.duration <= Duration.zero
@@ -154,7 +164,7 @@ class AnimePlaybackSurface extends StatelessWidget {
         : (state.buffered.inMilliseconds / state.duration.inMilliseconds * 100)
             .clamp(0, 100)
             .round();
-    return '${context.l10n.player_buffering}  $buffered / $duration  $percent%';
+    return '缓冲 $buffered / $duration  $percent%';
   }
 }
 
@@ -1478,41 +1488,11 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
 
   Widget _quickEpisodes() => SizedBox(
         width: 280,
-        child: GridView.builder(
-          shrinkWrap: true,
-          padding: const EdgeInsets.symmetric(horizontal: 10),
-          gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-            maxCrossAxisExtent: 56,
-            mainAxisSpacing: 6,
-            crossAxisSpacing: 6,
-            childAspectRatio: 1.6,
-          ),
-          itemCount: widget.episodes.length,
-          itemBuilder: (_, i) {
-            final on = i == _i;
-            return GestureDetector(
-              onTap: () {
-                _toggleQuick(_QuickPanel.episodes);
-                unawaited(_goTo(i));
-              },
-              child: Container(
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: on ? _accent.withValues(alpha: 0.2) : _panelChip,
-                  borderRadius: BorderRadius.circular(6),
-                  border:
-                      Border.all(color: on ? _accent : Colors.transparent),
-                ),
-                child: Text(
-                  _epShort(i),
-                  style: TextStyle(
-                    color: on ? _accent : Colors.white70,
-                    fontSize: 12.5,
-                    fontWeight: on ? FontWeight.w700 : FontWeight.w500,
-                  ),
-                ),
-              ),
-            );
+        child: _episodeList(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          onTap: (i) {
+            _toggleQuick(_QuickPanel.episodes);
+            unawaited(_goTo(i));
           },
         ),
       );
@@ -1790,49 +1770,72 @@ class _AnimePlayerPageState extends State<AnimePlayerPage> {
     );
   }
 
-  // —— 选集:话数网格 ——
-  Widget _panelEpisodes() {
-    final accent = _accent;
-    return GridView.builder(
-      padding: const EdgeInsets.fromLTRB(14, 14, 14, 20),
-      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-        maxCrossAxisExtent: 68,
-        mainAxisExtent: 40,
-        crossAxisSpacing: 10,
-        mainAxisSpacing: 10,
-      ),
+  // —— 选集:垂直文字列表 ——
+  Widget _panelEpisodes() => _episodeList(
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 20),
+        onTap: _goTo,
+      );
+
+  Widget _episodeList({
+    required EdgeInsets padding,
+    required ValueChanged<int> onTap,
+  }) => ListView.separated(
+      padding: padding,
       itemCount: widget.episodes.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 6),
       itemBuilder: (_, i) {
         final on = i == _i;
         return Tooltip(
           message: widget.episodes[i].name,
           waitDuration: const Duration(milliseconds: 500),
           child: Material(
-            color: on ? accent.withValues(alpha: 0.20) : _panelChip,
-            borderRadius: BorderRadius.circular(8),
+            color: on ? _accent.withValues(alpha: 0.18) : _panelChip,
+            borderRadius: BorderRadius.circular(7),
             child: InkWell(
-              borderRadius: BorderRadius.circular(8),
-              onTap: () => _goTo(i),
+              borderRadius: BorderRadius.circular(7),
+              onTap: () => onTap(i),
               child: Container(
-                alignment: Alignment.center,
+                height: 48,
+                padding: const EdgeInsets.symmetric(horizontal: 12),
                 decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(8),
-                  border: on ? Border.all(color: accent, width: 1.2) : null,
+                  borderRadius: BorderRadius.circular(7),
+                  border: on ? Border.all(color: _accent, width: 1.2) : null,
                 ),
-                child: Text(_epShort(i),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                        color: on ? accent : Colors.white,
-                        fontSize: 13,
-                        fontWeight: on ? FontWeight.w700 : FontWeight.w500)),
+                child: Row(
+                  children: [
+                    SizedBox(
+                      width: 58,
+                      child: Text(
+                        '第${_epShort(i)}集',
+                        style: TextStyle(
+                          color: on ? _accent : Colors.white70,
+                          fontSize: 13,
+                          fontWeight: on ? FontWeight.w700 : FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        widget.episodes[i].name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: on ? Colors.white : Colors.white70,
+                          fontSize: 13,
+                          fontWeight: on ? FontWeight.w700 : FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    if (on) Icon(Icons.play_arrow_rounded, color: _accent, size: 18),
+                  ],
+                ),
               ),
             ),
           ),
         );
       },
     );
-  }
 
   // —— 清晰度 ——
   //
