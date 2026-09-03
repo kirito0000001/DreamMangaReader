@@ -261,9 +261,6 @@ class HlsCacheGateway implements HlsSessionGateway {
         _upstream = upstream,
         _policy = HlsUpstreamPolicy(allowLoopback: allowLoopbackUpstream);
 
-  /// 缓冲健康时最多预读几片。再多也只是把带宽从正在播的那一片手里抢走。
-  static const int _maxPrefetchDepth = 3;
-
   final HlsCacheStore _cache;
   final HlsUpstreamClient _upstream;
   final bool allowLoopbackUpstream;
@@ -295,9 +292,7 @@ class HlsCacheGateway implements HlsSessionGateway {
       localUri: _localUri(id, root.id),
       onClose: () => _closeSession(id),
       onBuffer: (buffer) {
-        final healthy = buffer >= const Duration(seconds: 15);
-        if (data.bufferHealthy && !healthy) data.prefetchGeneration++;
-        data.bufferHealthy = healthy;
+        data.bufferHealthy = buffer >= const Duration(seconds: 15);
       },
       onSeek: () => data.prefetchGeneration++,
     );
@@ -461,7 +456,6 @@ class HlsCacheGateway implements HlsSessionGateway {
           ? const []
           : segmentResources
               .skip(index + 1)
-              .take(_maxPrefetchDepth)
               .map((resource) => resource.id)
               .toList();
     }
@@ -728,14 +722,10 @@ class HlsCacheGateway implements HlsSessionGateway {
 
   void _schedulePrefetch(_SessionData session, _Resource resource) {
     if (resource.prefetchIds.isEmpty || session.closing) return;
-    // 缓冲还没起来(<15s)就只预读 1 片,把上行留给正在播的那一片。
-    final depth = session.bufferHealthy ? _maxPrefetchDepth : 1;
-    // 整批替换而不是追加:播放位置一动,上一批预读就作废了。老实现是往一条 Future 链上
-    // 不停追加,链只增不减,于是一直在下播放器早就不需要的分片 —— 前台分片被一路顶到
-    // 卡顿超时后面,看着就像「必须等所有分片下完才开播」。
+    // VOD 直接排入当前片之后的全部分片;预取器逐片下载,暂停时也继续直到本集结束。
     session.prefetchQueue
       ..clear()
-      ..addAll(resource.prefetchIds.take(depth));
+      ..addAll(resource.prefetchIds);
     if (session.prefetchRunning) return;
     session.prefetchRunning = true;
     session.prefetch = _drainPrefetch(session, session.prefetchGeneration);
@@ -761,9 +751,6 @@ class HlsCacheGateway implements HlsSessionGateway {
         session.prefetchInFlight[id] = future;
         try {
           await future;
-          // 前台请求可能在本片预取期间开始;本片完成后暂停继续排队,
-          // 让下一次播放器请求重新决定预取窗口。
-          if (session.foregroundRequests > 0) return;
         } catch (_) {
           return; // 上游挂了:停掉本轮预读,前台取流会自己重试并把错误报出去
         } finally {
@@ -988,6 +975,14 @@ class HlsCacheGateway implements HlsSessionGateway {
     session.prefetchQueue.clear();
     await session.prefetch;
     _sessions.remove(id);
+    final resources = List<_Resource>.of(session.resources.values);
+    for (final resource in resources) {
+      if (!resource.live &&
+          (resource.kind == _ResourceKind.segment ||
+              resource.kind == _ResourceKind.init)) {
+        await _cache.remove(_cacheRequestFor(session, resource));
+      }
+    }
     for (final bytes in session.keyBytes.values) {
       bytes.fillRange(0, bytes.length, 0);
     }
