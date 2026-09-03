@@ -147,7 +147,7 @@ void main() {
 
     await session.close();
     expect((await _get(session.localUri)).status, HttpStatus.notFound);
-    expect(await cache.sizeBytes(), 0);
+    expect(await cache.sizeBytes(), greaterThan(0));
   });
 
   test('preserves map and byte ranges and keeps AES keys in session memory',

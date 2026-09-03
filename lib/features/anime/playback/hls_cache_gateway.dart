@@ -291,6 +291,7 @@ class HlsCacheGateway implements HlsSessionGateway {
     return HlsSession(
       localUri: _localUri(id, root.id),
       onClose: () => _closeSession(id),
+      onClearCache: () => _clearSessionCache(id),
       onBuffer: (buffer) {
         data.bufferHealthy = buffer >= const Duration(seconds: 15);
       },
@@ -975,6 +976,17 @@ class HlsCacheGateway implements HlsSessionGateway {
     session.prefetchQueue.clear();
     await session.prefetch;
     _sessions.remove(id);
+    for (final bytes in session.keyBytes.values) {
+      bytes.fillRange(0, bytes.length, 0);
+    }
+    session.keyBytes.clear();
+    session.resources.clear();
+    session.signatures.clear();
+  }
+
+  Future<void> _clearSessionCache(String id) async {
+    final session = _sessions[id];
+    if (session == null) return;
     final resources = List<_Resource>.of(session.resources.values);
     for (final resource in resources) {
       if (!resource.live &&
@@ -983,12 +995,6 @@ class HlsCacheGateway implements HlsSessionGateway {
         await _cache.remove(_cacheRequestFor(session, resource));
       }
     }
-    for (final bytes in session.keyBytes.values) {
-      bytes.fillRange(0, bytes.length, 0);
-    }
-    session.keyBytes.clear();
-    session.resources.clear();
-    session.signatures.clear();
   }
 
   Future<void> close() async {
